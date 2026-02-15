@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LoLQ</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="loading">
+    <div class="loader"></div>
+    <p>Loading champion data...</p>
+  </div>
+
+  <div id="app" class="hidden">
+    <header>
+      <div class="logo">LoLQ</div>
+      <span id="save-status" class="save-status"></span>
+    </header>
+
+    <main>
+      <section id="bans-section"></section>
+      <section id="pool-section">
+        <div class="section-header"><h2>Layout Pool</h2><button class="btn-add-inline" onclick="addLayout()">+ New Layout</button></div>
+        <div id="pool-grid" class="pool-grid"></div>
+      </section>
+      <section id="roles-section">
+        <div class="section-header"><h2>Role Priority</h2></div>
+        <div id="roles-grid" class="roles-grid"></div>
+      </section>
+      <section id="fallback-section"></section>
+    </main>
+  </div>
+
+  <div id="modal-overlay" class="modal-overlay hidden" onclick="closeModal(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div id="modal-content"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

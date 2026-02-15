@@ -1,0 +1,50 @@
+{
+  "bans": [
+    "Yasuo",
+    "Yone",
+    "Zed"
+  ],
+  "layouts": {
+    "1": {
+      "champion": "Darius",
+      "spells": ["flash", "teleport"],
+      "runes": ["conqueror", "triumph", "legend tenacity", "last stand", "bone plating", "unflinching", "attack speed", "adaptive force", "health"]
+    },
+    "2": {
+      "champion": "Lee Sin",
+      "spells": ["flash", "smite"],
+      "runes": ["conqueror", "triumph", "legend alacrity", "coup de grace", "magical footwear", "cosmic insight", "attack speed", "adaptive force", "health"]
+    },
+    "3": {
+      "champion": "Ahri",
+      "spells": ["flash", "ignite"],
+      "runes": ["electrocute", "cheap shot", "eyeball collection", "ultimate hunter", "manaflow band", "transcendence", "adaptive force", "adaptive force", "health"]
+    },
+    "4": {
+      "champion": "Veigar",
+      "spells": ["flash", "ignite"],
+      "runes": ["first strike", "magical footwear", "biscuit delivery", "cosmic insight", "manaflow band", "transcendence", "adaptive force", "adaptive force", "health"]
+    },
+    "5": {
+      "champion": "Jinx",
+      "spells": ["flash", "heal"],
+      "runes": ["lethal tempo", "presence of mind", "legend alacrity", "coup de grace", "absolute focus", "gathering storm", "attack speed", "adaptive force", "health"]
+    },
+    "6": {
+      "champion": "Thresh",
+      "spells": ["flash", "ignite"],
+      "runes": ["aftershock", "font of life", "bone plating", "unflinching", "biscuit delivery", "cosmic insight", "ability haste", "adaptive force", "health"]
+    }
+  },
+  "roles": {
+    "top": ["1"],
+    "jungle": ["2"],
+    "mid": ["3", "4"],
+    "bot": ["5"],
+    "utility": ["6"]
+  },
+  "fallback": {
+    "mode": "random_default",
+    "layout_id": ""
+  }
+}
