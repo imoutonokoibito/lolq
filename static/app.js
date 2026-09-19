@@ -163,6 +163,28 @@ async function loadConfig() {
   ROLES.forEach(r => { if (!state.config.roles[r]) state.config.roles[r] = []; });
   if (!state.config.bans) state.config.bans = [];
   if (!state.config.fallback) state.config.fallback = { mode: 'random_default', layout_id: '' };
+  const before = JSON.stringify(state.config.fallback);
+  normalizeFallback();
+  // Persist the repair so the bot uses what the editor shows
+  if (JSON.stringify(state.config.fallback) !== before) autoSave();
+}
+
+// "Use layout" must always point at an existing layout; with none left, fall back to random.
+function normalizeFallback() {
+  const fb = state.config.fallback;
+  if (fb.mode !== 'fallback_layout') {
+    fb.layout_id = '';
+    return;
+  }
+  if (!state.config.layouts[fb.layout_id]) {
+    const first = Object.keys(state.config.layouts)[0];
+    if (first) {
+      fb.layout_id = first;
+    } else {
+      fb.mode = 'random_default';
+      fb.layout_id = '';
+    }
+  }
 }
 
 async function saveConfig() {
@@ -323,6 +345,7 @@ function renderFallback() {
   const el = document.getElementById('fallback-section');
   const fb = state.config.fallback;
   const layoutIds = Object.keys(state.config.layouts);
+  const noLayouts = layoutIds.length === 0;
 
   const layoutOptions = layoutIds.map(lid => {
     const l = state.config.layouts[lid];
@@ -332,19 +355,23 @@ function renderFallback() {
 
   el.innerHTML = `
     <div class="section-header"><h2>Fallback</h2></div>
-    <p class="text-muted" style="margin-bottom:10px">When assigned a role with no layouts configured:</p>
+    <p class="text-muted" style="margin-bottom:10px">When none of your role's layouts can be picked (or the role has none):</p>
     <div class="fallback-options">
       <label class="fallback-radio ${fb.mode === 'random_default' ? 'active' : ''}" onclick="setFallbackMode('random_default')">
         <input type="radio" name="fb" ${fb.mode === 'random_default' ? 'checked' : ''}>
         Random champion + default runes
       </label>
-      <label class="fallback-radio ${fb.mode === 'fallback_layout' ? 'active' : ''}" onclick="setFallbackMode('fallback_layout')">
-        <input type="radio" name="fb" ${fb.mode === 'fallback_layout' ? 'checked' : ''}>
+      <label class="fallback-radio ${fb.mode === 'fallback_layout' ? 'active' : ''} ${noLayouts ? 'disabled' : ''}"
+             onclick="${noLayouts ? '' : "setFallbackMode('fallback_layout')"}">
+        <input type="radio" name="fb" ${fb.mode === 'fallback_layout' ? 'checked' : ''} ${noLayouts ? 'disabled' : ''}>
         Use layout:
-        <select onchange="setFallbackLayout(this.value)" onclick="event.stopPropagation()">
-          <option value="">-- select --</option>
-          ${layoutOptions}
-        </select>
+        ${noLayouts
+          ? '<span class="text-muted">(add a layout first)</span>'
+          : `<select onchange="setFallbackLayout(this.value)" onclick="event.stopPropagation()">${layoutOptions}</select>`}
+      </label>
+      <label class="fallback-radio ${fb.mode === 'dodge' ? 'active' : ''}" onclick="setFallbackMode('dodge')">
+        <input type="radio" name="fb" ${fb.mode === 'dodge' ? 'checked' : ''}>
+        Dodge champ select
       </label>
     </div>
   `;
@@ -384,10 +411,8 @@ function removeLayout(lid) {
   ROLES.forEach(r => {
     state.config.roles[r] = (state.config.roles[r] || []).filter(id => id !== lid);
   });
-  // Clear fallback if it referenced this layout
-  if (state.config.fallback.layout_id === lid) {
-    state.config.fallback.layout_id = '';
-  }
+  // Re-point the fallback if it referenced this layout
+  normalizeFallback();
   renderPool();
   renderRoles();
   renderFallback();
@@ -450,7 +475,7 @@ function removeFromRole(role, lid) {
 
 function setFallbackMode(mode) {
   state.config.fallback.mode = mode;
-  if (mode === 'random_default') state.config.fallback.layout_id = '';
+  normalizeFallback();
   renderFallback();
   autoSave();
 }

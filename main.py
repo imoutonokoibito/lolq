@@ -8,6 +8,7 @@ import re
 import random
 import os
 from lcu_driver import Connector
+from diagnostics import logger, request_lcu
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -19,11 +20,11 @@ am_i_picking = False
 in_game = False
 phase = ''
 have_i_prepicked = False
+have_i_dodged = False
 
-# Champion ids the logged-in account actually owns (None until first successful fetch).
-# LCU accepts a PATCH pick for an unowned champion ID with no error at the HTTP layer in
-# some client versions, so ownership must be checked ourselves before ever attempting a pick.
+# Ownership is diagnostic; champ-select eligibility also includes temporary unlocks.
 owned_champion_ids = None
+champ_select_lock = asyncio.Lock()
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
@@ -77,14 +78,14 @@ def load_config():
 try:
     _cfg = load_config()
     for role, ids in _cfg.get("roles", {}).items():
-        print(f"{role}: {len(ids)} picks")
-    print(f"Layouts: {len(_cfg.get('layouts', {}))}")
-    print(f"Bans: {len(_cfg.get('bans', []))}")
-    print(f"Fallback: {_cfg.get('fallback', {}).get('mode', 'random_default')}")
+        logger.info(f"{role}: {len(ids)} picks")
+    logger.info(f"Layouts: {len(_cfg.get('layouts', {}))}")
+    logger.info(f"Bans: {len(_cfg.get('bans', []))}")
+    logger.info(f"Fallback: {_cfg.get('fallback', {}).get('mode', 'random_default')}")
     del _cfg
 except Exception as e:
-    print(f"Error loading config.json: {str(e)}")
-    print("Please ensure config.json exists with valid configuration")
+    logger.info(f"Error loading config.json: {str(e)}")
+    logger.info("Please ensure config.json exists with valid configuration")
     exit(1)
 
 # Summoner spell mappings
@@ -153,7 +154,7 @@ async def get_runes_data():
         runes_data = runes_response.json()
         return runes_data
     except Exception as e:
-        print(f"Failed to load runes data: {str(e)}")
+        logger.info(f"Failed to load runes data: {str(e)}")
         return None
 
 async def load_stat_runes():
@@ -202,12 +203,12 @@ async def load_stat_runes():
         
         if stat_runes:
             STAT_RUNES.update(stat_runes)
-            print(f"Updated stat runes from Community Dragon API: {len(stat_runes)} stat runes loaded")
-            print(f"Current stat rune layout: Offense (5008/5005/5007), Flex (5008/5010/5001), Defense (5011/5013/5001)")
+            logger.info(f"Updated stat runes from Community Dragon API: {len(stat_runes)} stat runes loaded")
+            logger.info(f"Current stat rune layout: Offense (5008/5005/5007), Flex (5008/5010/5001), Defense (5011/5013/5001)")
         
     except Exception as e:
-        print(f"Failed to load stat runes from Community Dragon API: {str(e)}")
-        print("Using fallback stat rune values")
+        logger.info(f"Failed to load stat runes from Community Dragon API: {str(e)}")
+        logger.info("Using fallback stat rune values")
 
 def normalize_string(s):
     """Remove spaces, separators, and convert to lowercase for fuzzy matching"""
@@ -248,7 +249,7 @@ def build_rune_page(rune_names):
     for i, rune_name in enumerate(rune_names):
         rune_info = find_rune_by_name(rune_name)
         if not rune_info:
-            print(f"Could not find rune: {rune_name}")
+            logger.info(f"Could not find rune: {rune_name}")
             continue
             
         selected_runes.append(rune_info['id'])
@@ -260,7 +261,7 @@ def build_rune_page(rune_names):
             secondary_tree = rune_info['tree_id']
     
     if not primary_tree:
-        print("Could not determine primary rune tree")
+        logger.info("Could not determine primary rune tree")
         return None
     
     # Build the rune page data structure
@@ -318,6 +319,9 @@ def get_role_champions(assigned_position, config):
     # No layouts for this role - use fallback
     fallback_mode = fallback.get('mode', 'random_default')
 
+    if fallback_mode == 'dodge':
+        return []
+
     if fallback_mode == 'fallback_layout':
         fb_lid = fallback.get('layout_id', '')
         if fb_lid and fb_lid in layouts:
@@ -329,7 +333,7 @@ def get_role_champions(assigned_position, config):
 async def set_recommended_runes(connection, champion_id, position):
     """Try to set recommended runes from the LCU for a champion"""
     try:
-        pages_response = await connection.request('get', '/lol-perks/v1/recommended-pages')
+        pages_response = await request_lcu(connection, 'get', '/lol-perks/v1/recommended-pages')
         if hasattr(pages_response, 'json'):
             pages = await pages_response.json()
         else:
@@ -360,243 +364,269 @@ async def set_recommended_runes(connection, champion_id, position):
                 'current': True
             }
 
-            current_pages = await connection.request('get', '/lol-perks/v1/pages')
+            current_pages = await request_lcu(connection, 'get', '/lol-perks/v1/pages')
             if hasattr(current_pages, 'json'):
                 current_pages = await current_pages.json()
 
             for page in current_pages:
                 if page.get('name') == 'AutoPick Runes' and page.get('isDeletable', True):
-                    await connection.request('delete', f'/lol-perks/v1/pages/{page["id"]}')
+                    await request_lcu(connection, 'delete', f'/lol-perks/v1/pages/{page["id"]}')
                     break
 
-            await connection.request('post', '/lol-perks/v1/pages', data=rune_page)
-            print(f"Set recommended runes for champion {champion_id}")
+            await request_lcu(connection, 'post', '/lol-perks/v1/pages', data=rune_page)
+            logger.info(f"Set recommended runes for champion {champion_id}")
     except Exception as e:
-        print(f"Could not set recommended runes: {str(e)}")
+        logger.info(f"Could not set recommended runes: {str(e)}")
 
 async def get_owned_champion_ids(connection):
-    """Fetch the set of champion IDs the logged-in account owns (LCU 'lol-champions' plugin,
-    undocumented but community-verified: https://swagger.dysolix.dev/lcu/ -> owned-champions-minimal).
-    Returns None on failure so caller can decide to retry rather than treat as "owns nothing"."""
+    """Use inventory ownership flags when the shortcut endpoint is unavailable."""
     try:
-        resp = await connection.request('get', '/lol-champions/v1/owned-champions-minimal')
-        if hasattr(resp, 'status') and resp.status != 200:
-            print(f"owned-champions-minimal returned status {resp.status}")
-            return None
-        champs = await resp.json() if hasattr(resp, 'json') else resp
-        if not isinstance(champs, list):
-            return None
-        return {c['id'] for c in champs if c.get('id')}
+        champs = await get_lcu_json(connection, '/lol-champions/v1/owned-champions-minimal')
+        if isinstance(champs, list):
+            return {c['id'] for c in champs if c.get('id')}
+        logger.info('Owned-champions shortcut unavailable; trying summoner inventory')
+        summoner = await get_lcu_json(connection, '/lol-summoner/v1/current-summoner')
+        if isinstance(summoner, dict) and summoner.get('summonerId'):
+            champs = await get_lcu_json(connection,
+                f"/lol-champions/v1/inventories/{summoner['summonerId']}/champions-minimal")
+            if isinstance(champs, list):
+                return {c['id'] for c in champs
+                        if c.get('id') and c.get('ownership', {}).get('owned')}
     except Exception as e:
-        print(f"Failed to fetch owned champions: {str(e)}")
+        logger.info(f"Failed to fetch owned champions: {str(e)}")
+    return None
+
+
+async def get_lcu_json(connection, path):
+    try:
+        response = await request_lcu(connection, 'get', path)
+        if not 200 <= response.status < 300:
+            return None
+        return await response.json()
+    except Exception:
+        logger.debug('Could not read LCU JSON for %s', path, exc_info=True)
         return None
+
+
+async def verified_pick(connection, action, champion_id, completed):
+    """True = confirmed, False = rejected, None = uncertain/turn ended; stop picking."""
+    session = await get_lcu_json(connection, '/lol-champ-select/v1/session')
+    if not isinstance(session, dict):
+        return None
+    fresh = next((a for group in session.get('actions', []) for a in group
+                  if a['id'] == action['id'] and a['actorCellId'] == action['actorCellId']
+                  and a['type'] == 'pick'), None)
+    if fresh is None or fresh.get('completed') or (completed and not fresh.get('isInProgress')):
+        logger.info('Skipping pick: action %s is gone, completed, or no longer active', action['id'])
+        return None
+    logger.info('Attempting %s action=%s champion=%s',
+                'lock-in' if completed else 'hover', action['id'], champion_id)
+    try:
+        response = await request_lcu(connection, 'patch',
+            f"/lol-champ-select/v1/session/actions/{action['id']}",
+            data={'championId': champion_id, 'completed': completed})
+        if not 200 <= response.status < 300:
+            logger.info(f"LCU rejected champion {champion_id} (HTTP {response.status}): {await response.text()}")
+            return False
+    except Exception as e:
+        # A lost response does not prove the write failed. Read back before deciding.
+        logger.info(f"Pick request interrupted; checking client state: {e}")
+
+    current = None
+    for attempt in range(4):
+        if attempt:
+            await asyncio.sleep(0.2)
+        session = await get_lcu_json(connection, '/lol-champ-select/v1/session')
+        if not isinstance(session, dict):
+            current = None
+            continue
+        current = next((a for group in session.get('actions', []) for a in group
+                        if a['id'] == action['id'] and a['actorCellId'] == action['actorCellId']
+                        and a['type'] == 'pick'), None)
+        logger.debug('Pick verification attempt=%s action=%s expected_champion=%s lock=%s state=%s',
+                     attempt + 1, action['id'], champion_id, completed, current)
+        if current is None:
+            return None
+        if current.get('championId') == champion_id and (not completed or current.get('completed')):
+            return True
+        if current.get('completed') or (completed and not current.get('isInProgress')):
+            return None
+    if current is None:
+        logger.info('Cannot verify pick; waiting for a fresh champion-select update')
+        return None
+    logger.info(f"Client did not confirm champion {champion_id}; trying next candidate")
+    return False
 
 @connector.ready
 async def connect(connection):
-    global champions_map, runes_data, owned_champion_ids
+    global champions_map, runes_data, owned_champion_ids, have_i_prepicked
+    have_i_prepicked = False
+    logger.info('League client connected; loading champion and rune data')
     champions_map = await get_champions_map()
     runes_data = await get_runes_data()
     await load_stat_runes()
     owned_champion_ids = await get_owned_champion_ids(connection)
-    print(f"Owned champions: {len(owned_champion_ids) if owned_champion_ids else 'unknown (fetch failed)'}")
+    logger.info(f"Owned champions: {len(owned_champion_ids) if owned_champion_ids is not None else 'unknown; will verify picks in champion select'}")
 
 @connector.ws.register('/lol-matchmaking/v1/ready-check', event_types=('UPDATE',))
 async def ready_check_changed(connection, event):
     global have_i_prepicked
     if event.data['state'] == 'InProgress' and event.data['playerResponse'] == 'None':
-        await connection.request('post', '/lol-matchmaking/v1/ready-check/accept', data={})
+        await request_lcu(connection, 'post', '/lol-matchmaking/v1/ready-check/accept', data={})
         # Reset prepick status when accepting a new queue
         have_i_prepicked = False
-        print("Queue accepted, reset prepick status")
+        logger.info("Queue accepted, reset prepick status")
 
 
-@connector.ws.register('/lol-champ-select/v1/session', event_types=('CREATE', 'UPDATE',))
+@connector.ws.register('/lol-champ-select/v1/session', event_types=('CREATE', 'UPDATE', 'DELETE'))
 async def champ_select_changed(connection, event):
-    global am_i_assigned, pick_number, ban_number, am_i_banning, am_i_picking, phase, in_game, action_id, have_i_prepicked, assigned_position
+    global have_i_prepicked, have_i_dodged
+    # Websocket callbacks can overlap; queued events must never act on stale actions.
+    async with champ_select_lock:
+        logger.debug('Champion-select event=%s', event.type)
+        if event.type.upper() == 'DELETE':
+            have_i_prepicked = have_i_dodged = False
+            return
+        if event.type.upper() == 'CREATE':
+            have_i_prepicked = have_i_dodged = False
+        session = await get_lcu_json(connection, '/lol-champ-select/v1/session')
+        if isinstance(session, dict):
+            try:
+                await handle_champ_select(connection, session)
+            except Exception:
+                logger.exception('Champion-select handler failed; waiting for next update')
 
-    # Hot-reload config on every champ select event
+
+def pick_candidates(position, config, pickable, unavailable):
+    entries = list(get_role_champions(position, config))
+    fallback = config.get('fallback', {})
+    layout = config.get('layouts', {}).get(fallback.get('layout_id'))
+    if fallback.get('mode') == 'dodge':
+        pass
+    elif fallback.get('mode') == 'fallback_layout' and layout:
+        entries.append(layout)
+    else:
+        entries.append({'champion': '__RANDOM__', 'spells': [], 'runes': []})
+    seen = set()
+    for entry in entries:
+        data = parse_pick_entry(entry).copy()
+        is_random = data['champion'] == '__RANDOM__'
+        if is_random:
+            names = [name for name, cid in champions_map.items()
+                     if cid not in unavailable and cid not in seen
+                     and (pickable is None or cid in pickable)]
+            random.shuffle(names)
+            names = names[:5]
+        else:
+            names = [data['champion']]
+        for name in names:
+            cid = champions_map.get(name)
+            if not cid or cid in seen:
+                continue
+            seen.add(cid)
+            if cid in unavailable or (pickable is not None and cid not in pickable):
+                logger.info(f'{name} is not pickable, trying next candidate')
+                continue
+            candidate = dict(data, champion=name)
+            if is_random:
+                candidate.update(spells=DEFAULT_SPELLS.get(position, ['flash', 'ignite']), runes=[])
+            yield cid, candidate, is_random
+
+
+# Dodge endpoints, newest first. The legacy LCDS quitV2 invoke is kept last for older clients;
+# modern clients reject it (community reports: Snooze-Manager PR #21, lcu-driver issue #23).
+DODGE_PATHS = [
+    '/lol-lobby-team-builder/champ-select/v1/session/quit',
+    '/lol-gameflow/v1/session/dodge',
+    '/lol-login/v1/session/invoke?destination=lcdsServiceProxy&method=call'
+    '&args=["","teambuilder-draft","quitV2",""]',
+]
+
+
+async def dodge(connection):
+    """Leave champion select. True once any dodge endpoint accepts the request."""
+    for path in DODGE_PATHS:
+        try:
+            response = await request_lcu(connection, 'post', path)
+        except Exception as e:
+            logger.info(f'Dodge request {path} failed: {e}')
+            continue
+        if 200 <= response.status < 300:
+            logger.info(f'Dodged champion select via {path.split("?")[0]}')
+            return True
+        logger.info(f'Dodge request {path.split("?")[0]} rejected (HTTP {response.status})')
+    logger.info('All dodge requests were rejected; staying in champion select')
+    return False
+
+
+async def handle_champ_select(connection, session):
+    global have_i_prepicked, have_i_dodged
     try:
         config = load_config()
-        bans = config.get("bans", [])
     except Exception as e:
-        print(f"Config reload failed, using defaults: {e}")
+        logger.info(f'Config reload failed: {e}')
         return
-
-    lobby_phase = event.data['timer']['phase']
-
-    local_player_cell_id = event.data['localPlayerCellId']
-    for teammate in event.data['myTeam']:
-        if teammate['cellId'] == local_player_cell_id:
-            # LCU sends champ-select assignedPosition LOWERCASE ("utility", "middle").
-            # Uppercase values only exist on lobby position *preferences* — different endpoint.
-            # Normalize here once; role_mapping/DEFAULT_SPELLS are keyed uppercase.
-            assigned_position = (teammate['assignedPosition'] or '').upper()
-            am_i_assigned = True
-
-    print(f'Assigned position: {assigned_position}')
-
-    # Get list of banned champions
-    banned_champions = []
-    for action_list in event.data['actions']:
-        for action in action_list:
-            if action['type'] == 'ban' and action['completed']:
-                banned_champions.append(action['championId'])
-
-    for action in event.data['actions']:
-        for actionArr in action:
-            if actionArr['actorCellId'] == local_player_cell_id and actionArr['isInProgress'] == True:
-                phase = actionArr['type']
-                action_id = actionArr['id']
-                if phase == 'ban':
-                    am_i_banning = actionArr['isInProgress']
-                if phase == 'pick':
-                    am_i_picking = actionArr['isInProgress']
-
-    if phase == 'ban' and lobby_phase == 'BAN_PICK' and am_i_banning:
-        while am_i_banning and ban_number < len(bans):
-            try:
-                await connection.request('patch', '/lol-champ-select/v1/session/actions/%d' % action_id,
-                                         data={"championId": champions_map[bans[ban_number]], "completed": True})
-                print(f"Successfully banned {bans[ban_number]}")
+    cell = session['localPlayerCellId']
+    player = next((p for p in session['myTeam'] if p['cellId'] == cell), None)
+    if player is None:
+        return
+    position = (player.get('assignedPosition') or '').upper()
+    lobby_phase = session['timer']['phase']
+    actions = [a for group in session['actions'] for a in group]
+    logger.debug('Champion-select phase=%s cell=%s position=%s actions=%s',
+                 lobby_phase, cell, position, actions)
+    active = next((a for a in actions if a['actorCellId'] == cell
+                   and a['isInProgress'] and not a['completed']), None)
+    if active and active['type'] == 'ban' and lobby_phase == 'BAN_PICK':
+        for name in config.get('bans', []):
+            cid = champions_map.get(name)
+            if not cid:
+                continue
+            response = await request_lcu(connection, 'patch',
+                f"/lol-champ-select/v1/session/actions/{active['id']}",
+                data={'championId': cid, 'completed': True})
+            if 200 <= response.status < 300:
+                logger.info(f'Successfully banned {name}')
                 break
-            except Exception as e:
-                print(f"Failed to ban {bans[ban_number]}: {str(e)}")
-                print(f"Full error: {traceback.format_exc()}")
-                ban_number += 1
-                if ban_number >= len(bans):
-                    pick_number = 0
-        ban_number = 0
-        am_i_banning = False
 
-    if phase == 'pick' and lobby_phase == 'BAN_PICK' and am_i_picking:
-        role_champions = get_role_champions(assigned_position, config)
-        is_random = False
-        random_retries = 0
-        while am_i_picking and pick_number < len(role_champions):
-            try:
-                pick_data = parse_pick_entry(role_champions[pick_number])
-
-                # Handle random fallback
-                if pick_data['champion'] == '__RANDOM__':
-                    is_random = True
-                    available = [name for name, cid in champions_map.items() if cid not in banned_champions]
-                    if not available:
-                        break
-                    pick_data['champion'] = random.choice(available)
-                    pick_data['spells'] = DEFAULT_SPELLS.get(assigned_position, ['flash', 'ignite'])
-                    pick_data['runes'] = []
-
-                champion_id = champions_map.get(pick_data['champion'])
-
-                if not champion_id:
-                    print(f"Champion {pick_data['champion']} not found, trying next pick")
-                    pick_number += 1
-                    continue
-
-                if champion_id in banned_champions:
-                    print(f"{pick_data['champion']} is banned, trying next pick")
-                    pick_number += 1
-                    continue
-
-                if not is_random and owned_champion_ids is not None and champion_id not in owned_champion_ids:
-                    print(f"{pick_data['champion']} not owned, trying next pick")
-                    pick_number += 1
-                    continue
-
-                resp = await connection.request('patch', '/lol-champ-select/v1/session/actions/%d' % action_id,
-                                         data={"championId": champion_id, "completed": True})
-                if hasattr(resp, 'status') and resp.status >= 400:
-                    body = await resp.text() if hasattr(resp, 'text') else ''
-                    raise Exception(f"LCU rejected pick (status {resp.status}): {body}")
-                print(f"Successfully picked {pick_data['champion']} for {assigned_position}")
-
-                # Set summoner spells
-                if pick_data['spells']:
-                    await set_summoner_spells(connection, pick_data['spells'])
-
-                # Set runes - use recommended for random picks, config for explicit
-                if pick_data['runes']:
-                    await set_runes(connection, pick_data['runes'])
-                elif is_random:
-                    await set_recommended_runes(connection, champion_id, assigned_position)
-
-                break
-            except Exception as e:
-                print(f"Failed to pick: {str(e)}")
-                print(f"Full error: {traceback.format_exc()}")
-                if is_random:
-                    random_retries += 1
-                    if random_retries >= 5:
-                        break
-                    continue
-                pick_number += 1
-                if pick_number >= len(role_champions):
-                    pick_number = 0
-        pick_number = 0
-        am_i_picking = False
-
-    if lobby_phase == 'PLANNING' and not have_i_prepicked:
-        pick_action_id = None
-        for action_list in event.data['actions']:
-            for action in action_list:
-                if action['actorCellId'] == local_player_cell_id and action['type'] == 'pick':
-                    pick_action_id = action['id']
-                    break
-
-        if pick_action_id:
-            try:
-                role_champions = get_role_champions(assigned_position, config)
-                for entry in role_champions:
-                    pick_data = parse_pick_entry(entry)
-                    is_random = pick_data['champion'] == '__RANDOM__'
-
-                    # Handle random for pre-pick
-                    if is_random:
-                        available = list(champions_map.keys())
-                        if not available:
-                            continue
-                        pick_data['champion'] = random.choice(available)
-                        pick_data['spells'] = DEFAULT_SPELLS.get(assigned_position, ['flash', 'ignite'])
-
-                    champion_id = champions_map.get(pick_data['champion'])
-                    if not champion_id:
-                        continue
-
-                    if not is_random and owned_champion_ids is not None and champion_id not in owned_champion_ids:
-                        print(f"Skipping pre-pick, {pick_data['champion']} not owned, trying next")
-                        continue
-
-                    resp = await connection.request('patch', f'/lol-champ-select/v1/session/actions/{pick_action_id}',
-                                             data={"championId": champion_id, "completed": False})
-                    if hasattr(resp, 'status') and resp.status >= 400:
-                        body = await resp.text() if hasattr(resp, 'text') else ''
-                        print(f"LCU rejected pre-pick {pick_data['champion']} (status {resp.status}): {body}, trying next")
-                        continue
-
-                    print(f"Pre-picked {pick_data['champion']} for {assigned_position}")
-                    have_i_prepicked = True
-
-                    if pick_data['spells']:
-                        await set_summoner_spells(connection, pick_data['spells'])
-
-                    if pick_data['runes']:
-                        await set_runes(connection, pick_data['runes'])
-                    break
-            except Exception as e:
-                print(f"Failed to pre-pick: {str(e)}")
-                print(f"Full error: {traceback.format_exc()}")
-
-    if lobby_phase == 'FINALIZATION':
-        try:
-            game_state = await connection.request('get', '/lol-gameflow/v1/gameflow-phase')
-            if game_state == 'InGame' and not in_game:
-                print("Game started! Continuing to monitor for next champion select...")
-                in_game = True
-            await asyncio.sleep(2)
-        except Exception as e:
-            print('Waiting for game to start...')
-            print(f"Error checking game state: {str(e)}")
-            await asyncio.sleep(2)
+    locking = bool(active and active['type'] == 'pick' and lobby_phase == 'BAN_PICK')
+    planning = lobby_phase == 'PLANNING' and not have_i_prepicked
+    if not locking and not planning:
+        return
+    action = active if locking else next((a for a in actions
+        if a['actorCellId'] == cell and a['type'] == 'pick' and not a['completed']), None)
+    if action is None:
+        return
+    ids = await get_lcu_json(connection, '/lol-champ-select/v1/pickable-champion-ids')
+    pickable = set(ids) if isinstance(ids, list) else None
+    logger.debug('Pick eligibility ids=%s configured_layouts=%s fallback=%s',
+                 sorted(pickable) if pickable is not None else 'unknown',
+                 get_role_champions(position, config), config.get('fallback'))
+    # Ownership alone excludes free rotation and other temporary/queue unlocks.
+    # When eligibility is unavailable, verify each attempted pick against session state.
+    unavailable = {a['championId'] for a in actions if a['completed']
+                   and a['type'] in ('ban', 'pick') and a['championId']}
+    for cid, data, is_random in pick_candidates(position, config, pickable, unavailable):
+        result = await verified_pick(connection, action, cid, locking)
+        if result is None:
+            return
+        if not result:
+            continue
+        if planning:
+            have_i_prepicked = True
+        verb = 'Successfully picked' if locking else 'Pre-picked'
+        logger.info(f"{verb} {data['champion']} for {position} (confirmed by client)")
+        if data['spells']:
+            await set_summoner_spells(connection, data['spells'])
+        if data['runes']:
+            await set_runes(connection, data['runes'])
+        elif is_random and locking:
+            await set_recommended_runes(connection, cid, position)
+        return
+    logger.info(f'No confirmed pick for {position}; configured candidates exhausted')
+    # Only dodge on our actual pick turn: during planning, bans and trades can still change.
+    if locking and config.get('fallback', {}).get('mode') == 'dodge' and not have_i_dodged:
+        have_i_dodged = await dodge(connection)
 
 
 def parse_pick_entry(pick_entry):
@@ -625,7 +655,7 @@ async def set_summoner_spells(connection, spells):
             if spell_id:
                 spell_ids.append(spell_id)
             else:
-                print(f"Unknown summoner spell: {spell}")
+                logger.info(f"Unknown summoner spell: {spell}")
         
         if len(spell_ids) == 1:
             # Only one spell specified, set it as spell1, keep spell2 unchanged
@@ -636,13 +666,13 @@ async def set_summoner_spells(connection, spells):
         else:
             return
         
-        await connection.request('patch', '/lol-champ-select/v1/session/my-selection', data=data)
+        await request_lcu(connection, 'patch', '/lol-champ-select/v1/session/my-selection', data=data)
         spell_names = [spell for spell in spells if spell.lower() in SUMMONER_SPELLS]
-        print(f"Set summoner spells: {', '.join(spell_names)}")
+        logger.info(f"Set summoner spells: {', '.join(spell_names)}")
         
     except Exception as e:
-        print(f"Failed to set summoner spells {spells}: {str(e)}")
-        print(f"Full error: {traceback.format_exc()}")
+        logger.info(f"Failed to set summoner spells {spells}: {str(e)}")
+        logger.info(f"Full error: {traceback.format_exc()}")
 
 async def set_runes(connection, rune_names):
     """Set runes by creating/replacing a rune page"""
@@ -653,11 +683,11 @@ async def set_runes(connection, rune_names):
         # Build rune page from names
         rune_page_data = build_rune_page(rune_names)
         if not rune_page_data:
-            print("Failed to build rune page")
+            logger.info("Failed to build rune page")
             return
         
         # Get current rune pages to find one to replace
-        pages_response = await connection.request('get', '/lol-perks/v1/pages')
+        pages_response = await request_lcu(connection, 'get', '/lol-perks/v1/pages')
         if hasattr(pages_response, 'json'):
             current_pages = await pages_response.json()
         else:
@@ -680,19 +710,20 @@ async def set_runes(connection, rune_names):
         
         # Delete the page to replace
         if page_to_replace:
-            await connection.request('delete', f'/lol-perks/v1/pages/{page_to_replace["id"]}')
+            await request_lcu(connection, 'delete', f'/lol-perks/v1/pages/{page_to_replace["id"]}')
         
         # Create new rune page
-        await connection.request('post', '/lol-perks/v1/pages', data=rune_page_data)
-        print(f"Set runes: {rune_page_data['name']}")
+        await request_lcu(connection, 'post', '/lol-perks/v1/pages', data=rune_page_data)
+        logger.info(f"Set runes: {rune_page_data['name']}")
         
     except Exception as e:
-        print(f"Failed to set runes: {str(e)}")
-        print(f"Full error: {traceback.format_exc()}")
+        logger.info(f"Failed to set runes: {str(e)}")
+        logger.info(f"Full error: {traceback.format_exc()}")
 
 @connector.close
 async def disconnect(_):
-    print('The client has been closed!')
+    logger.info('The client has been closed!')
 
 
-connector.start()
+if __name__ == '__main__':
+    connector.start()

@@ -54,6 +54,13 @@ confirmation: sona `normalizePosition` lowercases + matches `'middle'`,
 must be `.upper()`-normalized at capture. Skipping this silently falls back
 to mid for every role.
 
+**Dodge** (`fallback.mode == "dodge"`): `main.py` `dodge()` POSTs, in order,
+`/lol-lobby-team-builder/champ-select/v1/session/quit` (modern),
+`/lol-gameflow/v1/session/dodge`, then the legacy LCDS invoke
+`/lol-login/v1/session/invoke?...["","teambuilder-draft","quitV2",""]`
+(removed in modern clients, returns 500). Stops at the first 2xx. Only fires
+on our actual pick turn after every candidate failed, never during PLANNING.
+
 ## Known-fixed bugs (don't reintroduce)
 
 - **Wrong role's layouts picked (support got mid champs)** (`main.py`

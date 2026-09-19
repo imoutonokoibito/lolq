@@ -9,7 +9,7 @@ player queues → bot accepts ready-check → on champ select: reads assigned ro
 - C1 stack: `main.py` (bot, `lcu-driver` aiohttp wrapper) + `server.py` (Flask config editor) + `static/app.js` (vanilla JS, no build) + `start.py` (launcher). Windows target, pyinstaller onefile.
 - C2 **no local League client** — logic changes verified by reading LCU swagger/community scripts, never by running. Sources: `https://raw.githubusercontent.com/dysolix/hasagi-types/main/swagger.json`, `swagger.dysolix.dev/lcu`, hextechdocs.dev, community bot repos.
 - C3 LCU API undocumented, changes without notice. No official error spec — observed shapes only.
-- C4 config format: `{bans[], layouts{id:{champion,spells,runes}}, roles{role:[layout_ids]}, fallback{mode,layout_id}}`. Old `champions.{role}.order` auto-migrates (`migrate_config`).
+- C4 config format: `{bans[], layouts{id:{champion,spells,runes}}, roles{role:[layout_ids]}, fallback{mode,layout_id}}`; `mode` ∈ `random_default` | `fallback_layout` (editor forces a valid `layout_id`, no unselected state) | `dodge`. Old `champions.{role}.order` auto-migrates (`migrate_config`).
 - C5 **push to GitHub on task completion** — `origin` = `github.com/imoutonokoibito/lolq.git` master. NOT under clod push ban.
 
 ## §I interfaces
@@ -25,7 +25,7 @@ player queues → bot accepts ready-check → on champ select: reads assigned ro
 - V2 **never trust 2xx on pick PATCH.** LCU accepts unowned-champion PATCH without HTTP error in some client versions. Check BOTH: `champion_id in owned_champion_ids` (fetched on connect, `None`=fetch-failed→skip check, not "owns nothing") AND `resp.status >= 400` → treat as rejected, fall through to next layout.
 - V3 **exact normalized match for reverse lookups, never substring.** `"healthscaling".includes("health")` → Defense shard row shows wrong selection on picker reopen. Substring OK only for forward user-input fuzzy match (`find_rune_by_name`), never config-value→UI reverse mapping.
 - V4 **config hot-reload every champ-select event** — `load_config()` inside handler, never cached at boot. Editor + bot run concurrently.
-- V5 **fallback chain never dead-ends:** layout list exhausted → fallback mode (`fallback_layout` → `random_default`). Random pick excludes banned; retries cap at 5.
+- V5 **fallback chain never dead-ends:** layout list exhausted → fallback mode (`fallback_layout` → `random_default`). Random pick excludes banned; retries cap at 5. Sole exception: `dodge` mode — on our live pick turn with every candidate failed, leave champ select (`dodge()`: team-builder `session/quit` → gameflow `session/dodge` → legacy `quitV2` invoke; first 2xx wins; once per session; never in PLANNING).
 - V6 pick/ban loop guards: banned champion → next layout; unknown name → next layout; `pick_number`/`ban_number` reset after phase so next game starts clean.
 
 ## §T tasks
@@ -35,7 +35,8 @@ player queues → bot accepts ready-check → on champ select: reads assigned ro
 | T2 | x | ownership check + status check on pick/prepick | V2 |
 | T3 | x | rune picker shard exact-match reverse lookup | V3 |
 | T4 | x | assignedPosition lowercase normalize | V1 |
-| T5 | . | no runnable check for pick state machine — extract role/pick decision logic to pure function + `test_*.py` when next touched | V1,V2,V5 |
+| T5 | ~ | no runnable check for pick state machine — extract role/pick decision logic to pure function + `test_*.py` when next touched (`tests/test_champion_select.py` covers handler + fallback/dodge) | V1,V2,V5 |
+| T6 | x | `dodge` fallback mode; editor "Use layout" always has a layout selected | C4,V5 |
 
 ## §B bugs
 | id | date | cause | fix | cites |

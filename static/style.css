@@ -423,6 +423,8 @@ section {
 }
 .fallback-radio:hover { border-color: var(--gold-dark); }
 .fallback-radio.active { border-color: var(--gold); }
+.fallback-radio.disabled { opacity: 0.5; cursor: not-allowed; }
+.fallback-radio.disabled:hover { border-color: var(--border); }
 .fallback-radio input[type="radio"] { accent-color: var(--gold); }
 .fallback-radio select {
   background: var(--bg);
