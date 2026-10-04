@@ -54,15 +54,48 @@ confirmation: sona `normalizePosition` lowercases + matches `'middle'`,
 must be `.upper()`-normalized at capture. Skipping this silently falls back
 to mid for every role.
 
-**Dodge** (`fallback.mode == "dodge"`): `main.py` `dodge()` POSTs, in order,
-`/lol-lobby-team-builder/champ-select/v1/session/quit` (modern),
-`/lol-gameflow/v1/session/dodge`, then the legacy LCDS invoke
-`/lol-login/v1/session/invoke?...["","teambuilder-draft","quitV2",""]`
-(removed in modern clients, returns 500). Stops at the first 2xx. Only fires
+**Dodge** (`fallback.mode == "dodge"`): `main.py` `dodge()` POSTs the LCDS
+`quitV2` invoke (`/lol-login/v1/session/invoke`, args as real query params
+*and* body `{"data": [...]}` — the no-body form is rejected locally in ~1ms),
+then `/lol-lobby-team-builder/champ-select/v1/session/quit`, up to
+`DODGE_ROUNDS` times. A 2xx proves nothing: success is confirmed by
+`/lol-gameflow/v1/gameflow-phase` leaving `ChampSelect`. Not used:
+`/lol-gameflow/v1/session/dodge` is the client's own dodge *notification*
+(requires body `{state, dodgeIds, phase}`), not a request to leave. Only fires
 on our actual pick turn after every candidate failed, never during PLANNING.
+
+## `src/` — TPM helpers (not part of the bot)
+
+`tpmcheck` (read-only state report), `tpmheal.ps1` (non-destructive heal, used by
+the task), `tpmfix` (wrapper; `-AllowClear` is the only destructive path),
+`tpmheal-install` (registers the `TpmHeal` SYSTEM task: boot + resume + daily).
+Heal runs log to the Application event log, source `TpmHeal`.
+
+**Never arm a TPM clear automatically.** `SetPhysicalPresenceRequest` with
+`Request = 22` queues a boot-time TPM clear, which wipes the SRK and owner
+auth; anything sealed to the TPM (BitLocker protectors, Windows Hello) breaks.
+This machine: Intel PTT 2.0, Win10 19045, Secure Boot DISABLED in BIOS (so
+TPM-WMI 1796 at every boot, PCR7 unbound) — Vanguard only gates on TPM 2.0 +
+Secure Boot on Windows 11, so TPM readiness was never the VAN blocker here.
 
 ## Known-fixed bugs (don't reintroduce)
 
+- **TPM "fix" that undid itself every boot** (`src/tpmfix.ps1`): when the live
+  heal did not finish within 48s it armed PPI op-22, a boot-time TPM *clear*.
+  Each reboot then wiped the SRK and owner auth and re-provisioned from
+  scratch (System log 1793 → 519 `ByPPI` → 1027 → 1025, 2026-09-28 and
+  09-29/30), so every run destroyed the state the previous run created. It
+  also promised a `TpmHeal` task that was never registered, so nothing healed
+  anything unattended. Fixed: heal is non-destructive, clears are opt-in and
+  guarded, leftover pending clears get cancelled, and `TpmHeal` actually
+  exists as a SYSTEM task on boot/resume/daily.
+- **Owned-champions fetch gave up on a startup race** (`main.py` `connect`):
+  champion endpoints answer `404 RPC_ERROR "Champion data has not yet been
+  received."` until the client's champions plugin finishes loading, and the
+  single attempt on connect landed inside that window, so ownership stayed
+  unknown for the whole session. Fixed by retrying in a background task with
+  backoff (`load_owned_champion_ids`) plus one more attempt at champion
+  select; the expected 404 is logged at debug via `quiet_statuses`.
 - **Wrong role's layouts picked (support got mid champs)** (`main.py`
   `champ_select_changed`): `assigned_position` was compared raw against
   UPPERCASE `role_mapping` keys, but the LCU sends it lowercase — every

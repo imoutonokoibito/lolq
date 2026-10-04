@@ -25,6 +25,12 @@ have_i_dodged = False
 # Ownership is diagnostic; champ-select eligibility also includes temporary unlocks.
 owned_champion_ids = None
 champ_select_lock = asyncio.Lock()
+_owned_champions_task = None
+
+# The client's champions plugin loads well after the LCU websocket accepts connections: until
+# it does, every champion endpoint answers 404 RPC_ERROR "Champion data has not yet been
+# received." That is a startup race, not a failure, so keep asking instead of giving up.
+CHAMPION_DATA_RETRY_DELAYS = (2, 5, 10, 15, 30, 60, 60, 60, 60)
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
@@ -379,16 +385,21 @@ async def set_recommended_runes(connection, champion_id, position):
         logger.info(f"Could not set recommended runes: {str(e)}")
 
 async def get_owned_champion_ids(connection):
-    """Use inventory ownership flags when the shortcut endpoint is unavailable."""
+    """Use inventory ownership flags when the shortcut endpoint is unavailable.
+    Returns None while the client has not loaded champion data yet (404) or on failure."""
     try:
-        champs = await get_lcu_json(connection, '/lol-champions/v1/owned-champions-minimal')
+        # 404 here is the expected "not loaded yet" answer, so keep it out of the warnings.
+        champs = await get_lcu_json(connection, '/lol-champions/v1/owned-champions-minimal',
+                                    quiet_statuses=(404,))
         if isinstance(champs, list):
             return {c['id'] for c in champs if c.get('id')}
-        logger.info('Owned-champions shortcut unavailable; trying summoner inventory')
-        summoner = await get_lcu_json(connection, '/lol-summoner/v1/current-summoner')
+        logger.debug('Owned-champions shortcut unavailable; trying summoner inventory')
+        summoner = await get_lcu_json(connection, '/lol-summoner/v1/current-summoner',
+                                      quiet_statuses=(404,))
         if isinstance(summoner, dict) and summoner.get('summonerId'):
             champs = await get_lcu_json(connection,
-                f"/lol-champions/v1/inventories/{summoner['summonerId']}/champions-minimal")
+                f"/lol-champions/v1/inventories/{summoner['summonerId']}/champions-minimal",
+                quiet_statuses=(404,))
             if isinstance(champs, list):
                 return {c['id'] for c in champs
                         if c.get('id') and c.get('ownership', {}).get('owned')}
@@ -397,9 +408,26 @@ async def get_owned_champion_ids(connection):
     return None
 
 
-async def get_lcu_json(connection, path):
+async def load_owned_champion_ids(connection, delays=CHAMPION_DATA_RETRY_DELAYS):
+    """Fill owned_champion_ids, waiting out the client's champion-data load. Runs in the
+    background so a slow or still-logging-in client never delays the rest of startup."""
+    global owned_champion_ids
+    for attempt, delay in enumerate((0,) + tuple(delays)):
+        if delay:
+            await asyncio.sleep(delay)
+        ids = await get_owned_champion_ids(connection)
+        if ids is not None:
+            owned_champion_ids = ids
+            logger.info(f'Owned champions: {len(ids)} (after {attempt + 1} attempt(s))')
+            return ids
+        logger.debug('Champion data not available yet (attempt %s); retrying', attempt + 1)
+    logger.info('Owned champions still unknown; picks stay verified against champion-select state')
+    return None
+
+
+async def get_lcu_json(connection, path, quiet_statuses=()):
     try:
-        response = await request_lcu(connection, 'get', path)
+        response = await request_lcu(connection, 'get', path, quiet_statuses=quiet_statuses)
         if not 200 <= response.status < 300:
             return None
         return await response.json()
@@ -459,14 +487,15 @@ async def verified_pick(connection, action, champion_id, completed):
 
 @connector.ready
 async def connect(connection):
-    global champions_map, runes_data, owned_champion_ids, have_i_prepicked
+    global champions_map, runes_data, owned_champion_ids, have_i_prepicked, _owned_champions_task
     have_i_prepicked = False
+    owned_champion_ids = None
     logger.info('League client connected; loading champion and rune data')
     champions_map = await get_champions_map()
     runes_data = await get_runes_data()
     await load_stat_runes()
-    owned_champion_ids = await get_owned_champion_ids(connection)
-    logger.info(f"Owned champions: {len(owned_champion_ids) if owned_champion_ids is not None else 'unknown; will verify picks in champion select'}")
+    # Keep a reference so the task is not garbage-collected mid-retry.
+    _owned_champions_task = asyncio.ensure_future(load_owned_champion_ids(connection))
 
 @connector.ws.register('/lol-matchmaking/v1/ready-check', event_types=('UPDATE',))
 async def ready_check_changed(connection, event):
@@ -533,29 +562,54 @@ def pick_candidates(position, config, pickable, unavailable):
             yield cid, candidate, is_random
 
 
-# Dodge endpoints, newest first. The legacy LCDS quitV2 invoke is kept last for older clients;
-# modern clients reject it (community reports: Snooze-Manager PR #21, lcu-driver issue #23).
-DODGE_PATHS = [
-    '/lol-lobby-team-builder/champ-select/v1/session/quit',
-    '/lol-gameflow/v1/session/dodge',
-    '/lol-login/v1/session/invoke?destination=lcdsServiceProxy&method=call'
-    '&args=["","teambuilder-draft","quitV2",""]',
+# Dodge requests, most reliable first. The LCDS quitV2 invoke is what LeagueAkari ships
+# (src/shared/http-api-axios-helper/league-client/login.ts): args as real query params plus the
+# JSON body {"data": [...]}. Posting it with no body is rejected locally (HTTP 500 in ~1 ms).
+# /lol-gameflow/v1/session/dodge is not used: per the swagger it is the client's own dodge
+# notification (required body {state, dodgeIds, phase}), not a request to leave.
+QUIT_V2_ARGS = ['', 'teambuilder-draft', 'quitV2', '']
+DODGE_REQUESTS = [
+    ('/lol-login/v1/session/invoke', {
+        'params': {'destination': 'lcdsServiceProxy', 'method': 'call',
+                   'args': json.dumps(QUIT_V2_ARGS)},
+        'data': {'data': QUIT_V2_ARGS}}),
+    ('/lol-lobby-team-builder/champ-select/v1/session/quit', {}),
 ]
+# LeagueAkari retries until champ select is gone; single attempts fail intermittently.
+DODGE_ROUNDS = 3
+
+
+async def left_champ_select(connection):
+    """A 2xx does not prove we left; confirm from the gameflow phase."""
+    for attempt in range(6):
+        if attempt:
+            await asyncio.sleep(0.25)
+        phase = await get_lcu_json(connection, '/lol-gameflow/v1/gameflow-phase')
+        if isinstance(phase, str) and phase != 'ChampSelect':
+            return True
+    return False
 
 
 async def dodge(connection):
-    """Leave champion select. True once any dodge endpoint accepts the request."""
-    for path in DODGE_PATHS:
-        try:
-            response = await request_lcu(connection, 'post', path)
-        except Exception as e:
-            logger.info(f'Dodge request {path} failed: {e}')
-            continue
-        if 200 <= response.status < 300:
-            logger.info(f'Dodged champion select via {path.split("?")[0]}')
-            return True
-        logger.info(f'Dodge request {path.split("?")[0]} rejected (HTTP {response.status})')
-    logger.info('All dodge requests were rejected; staying in champion select')
+    """Leave champion select. True only once the client confirms we are out of champ select."""
+    for round_number in range(DODGE_ROUNDS):
+        for path, kwargs in DODGE_REQUESTS:
+            try:
+                response = await request_lcu(connection, 'post', path, **kwargs)
+            except Exception as e:
+                logger.info(f'Dodge request {path} failed: {e}')
+                continue
+            if not 200 <= response.status < 300:
+                logger.info(f'Dodge request {path} rejected (HTTP {response.status}): '
+                            f'{await response.text()}')
+                continue
+            if await left_champ_select(connection):
+                logger.info(f'Dodged champion select via {path} (confirmed by gameflow phase)')
+                return True
+            logger.info(f'Dodge request {path} accepted but client is still in champion select')
+        if round_number + 1 < DODGE_ROUNDS:
+            await asyncio.sleep(0.3)
+    logger.info('Dodge failed: still in champion select after every request')
     return False
 
 
@@ -597,6 +651,9 @@ async def handle_champ_select(connection, session):
         if a['actorCellId'] == cell and a['type'] == 'pick' and not a['completed']), None)
     if action is None:
         return
+    # Champion data is always loaded by now, so a startup 404 can still be made good here.
+    if owned_champion_ids is None:
+        await load_owned_champion_ids(connection, delays=())
     ids = await get_lcu_json(connection, '/lol-champ-select/v1/pickable-champion-ids')
     pickable = set(ids) if isinstance(ids, list) else None
     logger.debug('Pick eligibility ids=%s configured_layouts=%s fallback=%s',

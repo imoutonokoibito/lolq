@@ -26,6 +26,8 @@ player queues → bot accepts ready-check → on champ select: reads assigned ro
 - V3 **exact normalized match for reverse lookups, never substring.** `"healthscaling".includes("health")` → Defense shard row shows wrong selection on picker reopen. Substring OK only for forward user-input fuzzy match (`find_rune_by_name`), never config-value→UI reverse mapping.
 - V4 **config hot-reload every champ-select event** — `load_config()` inside handler, never cached at boot. Editor + bot run concurrently.
 - V5 **fallback chain never dead-ends:** layout list exhausted → fallback mode (`fallback_layout` → `random_default`). Random pick excludes banned; retries cap at 5. Sole exception: `dodge` mode — on our live pick turn with every candidate failed, leave champ select (`dodge()`: team-builder `session/quit` → gameflow `session/dodge` → legacy `quitV2` invoke; first 2xx wins; once per session; never in PLANNING).
+- V7 **champion endpoints 404 until the client loads champion data** (`RPC_ERROR` "Champion data has not yet been received."). Startup race, not failure → retry with backoff in the background (`load_owned_champion_ids`), retry once more at champ select, log the expected 404 at debug (`quiet_statuses`). Never treat it as "owns nothing".
+- V8 **never arm a TPM clear automatically** (`src/`). PPI `Request = 22` clears the TPM at boot: SRK + owner auth gone, TPM-sealed keys (BitLocker, Hello) broken, and the "fix" undoes itself each reboot. Heal in place only (auto-provisioning + `Tpm-Maintenance` + `Initialize-Tpm`); clears opt-in via `tpmfix -AllowClear`, guarded on BitLocker/Hello. Unattended coverage = the `TpmHeal` SYSTEM task (boot + resume + daily), which must actually be registered.
 - V6 pick/ban loop guards: banned champion → next layout; unknown name → next layout; `pick_number`/`ban_number` reset after phase so next game starts clean.
 
 ## §T tasks
@@ -37,10 +39,14 @@ player queues → bot accepts ready-check → on champ select: reads assigned ro
 | T4 | x | assignedPosition lowercase normalize | V1 |
 | T5 | ~ | no runnable check for pick state machine — extract role/pick decision logic to pure function + `test_*.py` when next touched (`tests/test_champion_select.py` covers handler + fallback/dodge) | V1,V2,V5 |
 | T6 | x | `dodge` fallback mode; editor "Use layout" always has a layout selected | C4,V5 |
+| T7 | x | retry owned-champions through the client's champion-data load; silence lcu-driver's empty-frame logging error | V7 |
+| T8 | x | non-destructive TPM heal + registered `TpmHeal` task; no auto-clear | V8 |
 
 ## §B bugs
 | id | date | cause | fix | cites |
 |----|------|-------|-----|------|
 | B1 | 2026-08 | rune-picker Defense shard reverse-match used `includes()`; `health` matched before `health scaling` → wrong shard shown on reopen (saved config was correct) | exact normalized-string match in `openRunePicker` | V3 |
 | B2 | 2026-08 | pick loop treated any non-exception PATCH as success; never checked status or ownership → unowned champ "Successfully picked", no fallthrough | fetch `owned-champions-minimal` on connect; check ownership + `resp.status>=400` before declaring success | V2 |
+| B4 | 2026-10-04 | `tpmfix` armed boot-time TPM clear (PPI op-22) as its fallback; promised `TpmHeal` task was never registered | heal in place, cancel leftover clears, `-AllowClear` opt-in + guarded, register the SYSTEM task | V8 |
+| B5 | 2026-10-04 | single owned-champions fetch on connect hit the client's "Champion data has not yet been received" 404 window → ownership unknown all session | background retry with backoff + champ-select retry; expected 404 at debug | V7 |
 | B3 | 2026-09-02 | `assigned_position` compared raw lowercase LCU value against UPPERCASE `role_mapping` keys → every lookup missed → `'mid'` default for ALL roles (utility got mid layouts: Ahri→Veigar) | `.upper()` normalize at capture in `champ_select_changed` | V1 |

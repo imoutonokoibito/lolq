@@ -29,17 +29,26 @@ class Client:
         self.patches = []
         self.posts = []
         self.dodge_status = {}
+        self.dodge_leaves = True
+        self.phase = 'ChampSelect'
         self.readable = True
 
-    async def request(self, method, path, data=None):
+    async def request(self, method, path, data=None, **kwargs):
         await asyncio.sleep(0)
         if method == 'get':
             if path.endswith('pickable-champion-ids'):
                 return Response([1, 2, 3])
+            if path.endswith('gameflow-phase'):
+                return Response(self.phase)
+            if path.startswith('/lol-champions/'):
+                return Response(status=404)
             return Response(self.session) if self.readable else Response(status=404)
         if method == 'post':
             self.posts.append(path)
-            return Response(status=self.dodge_status.get(path, 204))
+            status = self.dodge_status.get(path, 204)
+            if 200 <= status < 300 and self.dodge_leaves:
+                self.phase = 'Lobby'
+            return Response(status=status)
         cid = data['championId']
         self.patches.append(cid)
         outcome = self.outcomes.get(cid, 'accept')
@@ -58,6 +67,7 @@ class ChampionSelectTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         main.have_i_prepicked = False
         main.have_i_dodged = False
+        main.owned_champion_ids = None
         main.champ_select_lock = asyncio.Lock()
         self.config = dict(layouts={
             'a': dict(champion='A', spells=['flash'], runes=['rune']),
@@ -145,18 +155,27 @@ class ChampionSelectTests(unittest.IsolatedAsyncioTestCase):
         client = Client({1: 'reject', 2: 'reject'})
         await main.handle_champ_select(client, client.session)
         self.assertEqual(client.patches, [1, 2])
-        self.assertEqual(client.posts, [main.DODGE_PATHS[0]])
+        self.assertEqual(client.posts, [main.DODGE_REQUESTS[0][0]])
         await main.handle_champ_select(client, client.session)
-        self.assertEqual(client.posts, [main.DODGE_PATHS[0]])
+        self.assertEqual(client.posts, [main.DODGE_REQUESTS[0][0]])
 
     async def test_dodge_tries_next_endpoint_when_rejected(self):
         self.config['fallback'] = {'mode': 'dodge', 'layout_id': ''}
         self.config['roles'] = {}
         client = Client()
-        client.dodge_status = {main.DODGE_PATHS[0]: 404}
+        client.dodge_status = {main.DODGE_REQUESTS[0][0]: 500}
         await main.handle_champ_select(client, client.session)
         self.assertEqual(client.patches, [])
-        self.assertEqual(client.posts, main.DODGE_PATHS[:2])
+        self.assertEqual(client.posts, [path for path, _ in main.DODGE_REQUESTS])
+
+    async def test_dodge_retries_while_still_in_champ_select(self):
+        self.config['fallback'] = {'mode': 'dodge', 'layout_id': ''}
+        self.config['roles'] = {}
+        client = Client()
+        client.dodge_leaves = False
+        await main.handle_champ_select(client, client.session)
+        self.assertEqual(len(client.posts), len(main.DODGE_REQUESTS) * main.DODGE_ROUNDS)
+        self.assertFalse(main.have_i_dodged)
 
     async def test_no_dodge_during_planning(self):
         self.config['fallback'] = {'mode': 'dodge', 'layout_id': ''}
@@ -165,6 +184,20 @@ class ChampionSelectTests(unittest.IsolatedAsyncioTestCase):
         client.session['timer']['phase'] = 'PLANNING'
         await main.handle_champ_select(client, client.session)
         self.assertEqual(client.posts, [])
+
+    async def test_owned_champions_retry_survives_startup_404(self):
+        # The client answers 404 "Champion data has not yet been received" until it finishes
+        # loading, so a single attempt on connect is not enough.
+        attempts = AsyncMock(side_effect=[None, None, {7}])
+        with patch.object(main, 'get_owned_champion_ids', attempts):
+            self.assertEqual(await main.load_owned_champion_ids(Client(), delays=(0, 0)), {7})
+        self.assertEqual(main.owned_champion_ids, {7})
+        self.assertEqual(attempts.await_count, 3)
+
+    async def test_owned_champions_404_at_startup_is_not_fatal(self):
+        client = Client()
+        self.assertIsNone(await main.get_owned_champion_ids(client))
+        self.assertIsNone(await main.load_owned_champion_ids(client, delays=()))
 
 
 if __name__ == '__main__':

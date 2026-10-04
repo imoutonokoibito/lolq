@@ -35,10 +35,27 @@ def configure_logging():
 logger = configure_logging()
 
 
-async def request_lcu(connection, method, path, **kwargs):
+class _LcuDriverNoise(logging.Filter):
+    """lcu-driver logs empty websocket frames with a malformed format string, which makes
+    Python print a '--- Logging error ---' traceback. Empty frames are keep-alives: drop them."""
+
+    def filter(self, record):
+        if str(record.msg).startswith('Error decoding the following JSON'):
+            payload = record.args[0] if isinstance(record.args, tuple) and record.args else ''
+            if not str(payload).strip():
+                return False
+            record.msg, record.args = 'lcu-driver could not decode a websocket frame: %s', (payload,)
+        return True
+
+
+logging.getLogger('lcu-driver').addFilter(_LcuDriverNoise())
+
+
+async def request_lcu(connection, method, path, quiet_statuses=(), **kwargs):
     started = time.monotonic()
     # Only caller-supplied gameplay payloads, never headers, auth or connection URLs.
-    logger.debug('LCU request %s %s data=%s', method.upper(), path, kwargs.get('data'))
+    logger.debug('LCU request %s %s params=%s data=%s', method.upper(), path,
+                 kwargs.get('params'), kwargs.get('data'))
     try:
         response = await connection.request(method, path, **kwargs)
     except Exception as exc:
@@ -49,5 +66,10 @@ async def request_lcu(connection, method, path, **kwargs):
     logger.debug('LCU response %s %s status=%s elapsed_ms=%.0f',
                  method.upper(), path, response.status, elapsed)
     if not 200 <= response.status < 300:
-        logger.warning('LCU error %s %s status=%s', method.upper(), path, response.status)
+        level = logging.DEBUG if response.status in quiet_statuses else logging.WARNING
+        try:
+            body = (await response.text())[:500]
+        except Exception:
+            body = '<unreadable>'
+        logger.log(level, 'LCU error %s %s status=%s body=%s', method.upper(), path, response.status, body)
     return response
