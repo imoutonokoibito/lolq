@@ -6,7 +6,17 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 gh release download "$TAG" --repo imoutonokoibito/lolq --pattern 'LoLQ-Setup.exe' --pattern 'SHA256SUMS.txt' --dir "$STAGE"
-(cd "$STAGE" && LC_ALL=C shasum -a 256 -c SHA256SUMS.txt)
+python3 - "$STAGE" <<'VERIFY'
+import hashlib
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+expected = (root / 'SHA256SUMS.txt').read_text(encoding='utf-8-sig').split()[0]
+actual = hashlib.sha256((root / 'LoLQ-Setup.exe').read_bytes()).hexdigest()
+if actual != expected:
+    raise SystemExit('Installer checksum mismatch')
+print('Installer SHA-256 verified')
+VERIFY
 ssh imoutosuki 'mkdir -p /root/lolq/static /root/lolq/downloads /var/run/imoutosuki'
 rsync -az "$STAGE/LoLQ-Setup.exe" "$STAGE/SHA256SUMS.txt" imoutosuki:/root/lolq/downloads/
 rsync -az "$ROOT/static/" imoutosuki:/root/lolq/static/
