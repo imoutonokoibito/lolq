@@ -39,12 +39,12 @@ This does two things:
 
 In the browser page that opens:
 
-- **Bans** - Set which champions to auto-ban
-- **Layouts** - Create champion configs (champion + spells + runes)
-- **Roles** - Drag layouts into roles so the right champion is picked for each position
-- **Fallback** - Choose what happens if your role has no layout set
+- **Your champions** — Add a champion, edit its spells and runes, then select the roles it should play.
+- **Pick order** — Drag picks within each role, or use the arrows to change priority.
+- **Your bans** — Choose bans in priority order.
+- **When picks run out** — Choose a fallback for roles without an available configured pick.
 
-All changes save automatically. No save button needed.
+All changes save automatically. The header confirms when they are saved and offers Retry if a save fails. The editor follows your system’s light or dark appearance and supports keyboard navigation.
 
 ### 5. Play
 

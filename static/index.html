@@ -3,43 +3,62 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LoLQ</title>
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f5f5f7">
+  <title>LoLQ · Your champion select</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div id="loading">
-    <div class="loader"></div>
-    <p>Loading champion data...</p>
+  <a class="skip-link" href="#main">Skip to settings</a>
+  <div id="loading" role="status">
+    <div class="loader" aria-hidden="true"></div>
+    <p>Getting your champions ready…</p>
   </div>
 
   <div id="app" class="hidden">
-    <header>
-      <div class="logo">LoLQ</div>
-      <span id="save-status" class="save-status"></span>
+    <header class="app-header">
+      <a class="logo" href="#main" aria-label="LoLQ home">lolq<span aria-hidden="true">.</span></a>
+      <nav aria-label="Settings sections">
+        <a href="#pool-section">Champions</a>
+        <a href="#roles-section">Roles</a>
+        <a href="#preferences">Preferences</a>
+      </nav>
+      <div class="save-indicator"><span id="save-status" class="save-status" role="status" aria-live="polite">Changes save automatically</span><button id="retry-save" class="btn-sm hidden" onclick="saveConfig()">Retry</button></div>
     </header>
 
-    <main>
-      <section id="bans-section"></section>
-      <section id="pool-section">
-        <div class="section-header"><h2>Layout Pool</h2><button class="btn-add-inline" onclick="addLayout()">+ New Layout</button></div>
+    <main id="main">
+      <div class="intro">
+        <p class="eyebrow">YOUR CHAMPION SELECT</p>
+        <h1>Ready for your next game.</h1>
+        <p>Your champions, spells, and runes. Just the way you play.</p>
+        <div class="editor-note"><span aria-hidden="true">↳</span> Keep the LoLQ autopicker running while you play.</div>
+      </div>
+      <section id="pool-section" aria-labelledby="pool-title">
+        <div class="section-header">
+          <div><h2 id="pool-title">Your champions</h2><p>A layout brings a champion, spells, and runes together. Select its roles below.</p></div>
+          <button class="btn-primary" onclick="addLayout()"><span aria-hidden="true">＋</span> Add champion</button>
+        </div>
         <div id="pool-grid" class="pool-grid"></div>
       </section>
-      <section id="roles-section">
-        <div class="section-header"><h2>Role Priority</h2></div>
+      <section id="roles-section" aria-labelledby="roles-title">
+        <div class="section-header"><div><h2 id="roles-title">Pick order</h2><p>First choice at the top. Drag or use the arrows to change priority.</p></div></div>
         <div id="roles-grid" class="roles-grid"></div>
       </section>
-      <section id="fallback-section"></section>
+      <div id="preferences" class="preferences">
+        <section id="bans-section" aria-labelledby="bans-title"></section>
+        <section id="fallback-section" aria-labelledby="fallback-title"></section>
+      </div>
+      <footer class="app-footer"><span>Set once. Ready for the next queue.</span><span>LoLQ · Local configuration</span></footer>
     </main>
   </div>
 
   <div id="modal-overlay" class="modal-overlay hidden" onclick="closeModal(event)">
-    <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1" onclick="event.stopPropagation()">
+      <button class="modal-close btn-x" aria-label="Close dialog" onclick="closeModalForce()">×</button>
       <div id="modal-content"></div>
     </div>
   </div>
-
-  <div id="toast" class="toast hidden"></div>
-
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
   <script src="app.js"></script>
 </body>

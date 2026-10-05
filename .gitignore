@@ -32,3 +32,4 @@ env/
 
 # Screenshots
 *.png
+!lolq-ui.png

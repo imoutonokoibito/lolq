@@ -1,8 +1,8 @@
 // LoLQ Config Editor - Layouts-first architecture
 
 const ROLES = ['top', 'jungle', 'mid', 'bot', 'utility'];
-const ROLE_LABELS = { top: 'Top', jungle: 'Jungle', mid: 'Mid', bot: 'Bot', utility: 'Utility' };
-const ROLE_SHORT = { top: 'T', jungle: 'J', mid: 'M', bot: 'B', utility: 'U' };
+const ROLE_LABELS = { top: 'Top', jungle: 'Jungle', mid: 'Mid', bot: 'Bot', utility: 'Support' };
+const ROLE_SHORT = ROLE_LABELS;
 
 // Hardcoded fallback for spell key mapping (used if DDragon summoner.json fails)
 const SPELL_KEYS_FALLBACK = {
@@ -154,7 +154,9 @@ async function loadDDragon() {
 }
 
 async function loadConfig() {
-  state.config = await fetch('/api/config').then(r => r.json());
+  const response = await fetch('/api/config');
+  if (!response.ok) throw new Error('Could not load your configuration');
+  state.config = await response.json();
   if (!state.config.layouts) state.config.layouts = {};
   if (!state.config.roles) {
     state.config.roles = {};
@@ -187,27 +189,54 @@ function normalizeFallback() {
   }
 }
 
-async function saveConfig() {
+let saveRevision = 0;
+let savedRevision = 0;
+let saving = false;
+let _autoSaveTimer = null;
+
+function saveStatus(message, kind = '') {
   const el = document.getElementById('save-status');
+  el.textContent = message;
+  el.className = `save-status ${kind}`;
+  document.getElementById('retry-save').classList.toggle('hidden', kind !== 'err');
+}
+
+async function saveConfig() {
+  if (saving) return;
+  saving = true;
+  saveStatus('Saving…');
   try {
-    await fetch('/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(state.config)
-    });
-    if (el) { el.textContent = 'Saved'; el.className = 'save-status ok'; }
-    clearTimeout(el?._t);
-    if (el) el._t = setTimeout(() => { el.textContent = ''; el.className = 'save-status'; }, 1500);
+    // Serialize writes, then save again if editing continued during the request.
+    do {
+      const revision = saveRevision;
+      const response = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(state.config)
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const result = await response.json();
+      if (!result.ok) throw new Error('Save not acknowledged');
+      savedRevision = revision;
+    } while (savedRevision !== saveRevision);
+    saveStatus('All changes saved', 'ok');
   } catch (e) {
-    if (el) { el.textContent = 'Save failed'; el.className = 'save-status err'; }
+    saveStatus('Changes not saved', 'err');
+  } finally {
+    saving = false;
   }
 }
 
-let _autoSaveTimer = null;
 function autoSave() {
+  saveRevision++;
+  saveStatus('Saving…');
   clearTimeout(_autoSaveTimer);
   _autoSaveTimer = setTimeout(saveConfig, 150);
 }
+
+window.addEventListener('beforeunload', e => {
+  if (savedRevision !== saveRevision) { e.preventDefault(); e.returnValue = ''; }
+});
 
 // ===================== RENDERING =====================
 
@@ -222,23 +251,29 @@ function renderBans() {
   const el = document.getElementById('bans-section');
   const bans = state.config.bans;
   el.innerHTML = `
-    <div class="section-header"><h2>Bans</h2></div>
+    <div class="section-header"><div><h2 id="bans-title">Your bans</h2><p>LoLQ tries these in order, from left to right.</p></div></div>
     <div id="bans-list" class="bans-list">
       ${bans.map((b, i) => `
         <div class="ban-item" data-index="${i}">
           <img src="${champIcon(b)}" alt="${esc(b)}" onerror="this.style.display='none'">
           <span>${b}</span>
-          <button class="btn-x" onclick="removeBan(${i})">&times;</button>
+          <button class="order-button" aria-label="Move ${esc(b)} earlier" onclick="moveBan(${i},-1)" ${i === 0 ? 'disabled' : ''}>‹</button>
+          <button class="order-button" aria-label="Move ${esc(b)} later" onclick="moveBan(${i},1)" ${i === bans.length - 1 ? 'disabled' : ''}>›</button>
+          <button class="btn-x" aria-label="Remove ban ${esc(b)}" onclick="removeBan(${i})">&times;</button>
         </div>
       `).join('')}
     </div>
-    <button class="btn-add" onclick="addBan()">+ Add Ban</button>
+    <button class="btn-add" onclick="addBan()">＋ Add ban</button>
   `;
-  new Sortable(document.getElementById('bans-list'), {
+  if (window.Sortable) new Sortable(document.getElementById('bans-list'), {
+    filter: 'button',
+    preventOnFilter: false,
     animation: 150,
+    draggable: '.ban-item',
     onEnd: e => {
       const item = state.config.bans.splice(e.oldIndex, 1)[0];
       state.config.bans.splice(e.newIndex, 0, item);
+      renderBans();
       autoSave();
     }
   });
@@ -248,7 +283,7 @@ function renderPool() {
   const grid = document.getElementById('pool-grid');
   const layoutIds = Object.keys(state.config.layouts);
   if (layoutIds.length === 0) {
-    grid.innerHTML = '<p class="text-muted" style="padding:8px">No layouts yet. Click "+ New Layout" to add one.</p>';
+    grid.innerHTML = '<div class="empty-state"><h3>Start with a favorite.</h3><p>Choose your first champion with “Add champion” above.</p></div>';
     return;
   }
   grid.innerHTML = layoutIds.map(lid => {
@@ -269,26 +304,26 @@ function renderPool() {
 
     const roleBtns = ROLES.map(r => {
       const active = (state.config.roles[r] || []).includes(lid);
-      return `<button class="pool-role-btn ${active ? 'active' : ''}" onclick="toggleLayoutRole('${lid}','${r}')" title="${ROLE_LABELS[r]}">${ROLE_SHORT[r]}</button>`;
+      return `<button class="pool-role-btn ${active ? 'active' : ''}" aria-pressed="${active}" onclick="toggleLayoutRole('${lid}','${r}')" title="${ROLE_LABELS[r]}">${ROLE_SHORT[r]}</button>`;
     }).join('');
 
     return `
       <div class="pool-card" data-layout-id="${lid}">
         <div class="pool-card-top">
-          <div class="pool-card-icon">
-            <img src="${champIcon(name)}" alt="${esc(name)}" onerror="this.style.opacity=0.3" onclick="changeLayoutChampion('${lid}')">
-          </div>
+          <button class="pool-card-icon" aria-label="Change ${esc(name)} champion" onclick="changeLayoutChampion('${lid}')">
+            <img src="${champIcon(name)}" alt="" onerror="this.style.opacity=0.3">
+          </button>
           <div class="pool-card-info">
-            <div class="pool-card-name" onclick="changeLayoutChampion('${lid}')">${name}</div>
+            <button class="pool-card-name" onclick="changeLayoutChampion('${lid}')">${name}</button>
+            <p class="pool-card-subtitle">${ROLES.filter(r => state.config.roles[r].includes(lid)).map(r => ROLE_LABELS[r]).join(' · ') || 'Choose a role below'}</p>
           </div>
-          <div class="pool-card-actions">
-            <button class="btn-sm" onclick="editLayoutSpells('${lid}')">Spells</button>
-            <button class="btn-sm" onclick="editLayoutRunes('${lid}')">Runes</button>
-            <button class="btn-sm btn-danger" onclick="removeLayout('${lid}')">&times;</button>
-          </div>
+          <button class="btn-x btn-danger" aria-label="Remove ${esc(name)} layout" onclick="removeLayout('${lid}')">×</button>
         </div>
-        <div class="pool-card-details">${spellHtml}${keystoneHtml}</div>
-        <div class="pool-card-bottom">${roleBtns}</div>
+        <div class="pool-card-details">
+          <button class="loadout-button" aria-label="Edit ${esc(name)} spells" onclick="editLayoutSpells('${lid}')">${spellHtml}<span>${spells.length ? 'Spells' : 'Default spells'}</span></button>
+          <button class="loadout-button" aria-label="Edit ${esc(name)} runes" onclick="editLayoutRunes('${lid}')">${keystoneHtml}<span>${runes.length ? 'Runes' : 'Recommended'}</span></button>
+        </div>
+        <div class="pool-card-bottom" role="group" aria-label="Roles for ${esc(name)}">${roleBtns}</div>
       </div>
     `;
   }).join('');
@@ -302,14 +337,17 @@ function renderRoles() {
       const layout = state.config.layouts[lid];
       if (!layout) return '';
       const name = layout.champion || '???';
-      const spellImgs = (layout.spells || []).map(s => `<img src="${spellIcon(s)}" title="${s}">`).join('');
+
       return `
         <div class="role-item" data-lid="${lid}">
           <span class="role-item-num">${i + 1}</span>
           <div class="role-item-icon"><img src="${champIcon(name)}" alt="${esc(name)}" onerror="this.style.opacity=0.3"></div>
           <span class="role-item-name">${name}</span>
-          <div class="role-item-spells">${spellImgs}</div>
-          <button class="role-item-remove" onclick="removeFromRole('${role}','${lid}')">&times;</button>
+          <div class="role-item-controls">
+            <button class="order-button" aria-label="Move ${esc(name)} up in ${ROLE_LABELS[role]}" onclick="moveInRole('${role}',${i},-1)" ${i === 0 ? 'disabled' : ''}>↑</button>
+            <button class="order-button" aria-label="Move ${esc(name)} down in ${ROLE_LABELS[role]}" onclick="moveInRole('${role}',${i},1)" ${i === ids.length - 1 ? 'disabled' : ''}>↓</button>
+            <button class="role-item-remove" aria-label="Remove ${esc(name)} from ${ROLE_LABELS[role]}" onclick="removeFromRole('${role}','${lid}')">×</button>
+          </div>
         </div>
       `;
     }).join('');
@@ -317,7 +355,7 @@ function renderRoles() {
     return `
       <div class="role-column">
         <div class="role-column-header">${ROLE_LABELS[role]}<span class="role-count">${ids.length}</span></div>
-        <div class="role-column-items" id="role-items-${role}">${items}</div>
+        <div class="role-column-items" id="role-items-${role}">${items || '<p class="role-empty">Uses fallback</p>'}</div>
       </div>
     `;
   }).join('');
@@ -325,9 +363,12 @@ function renderRoles() {
   // Setup SortableJS on each column
   ROLES.forEach(role => {
     const el = document.getElementById(`role-items-${role}`);
-    if (el) {
+    if (el && window.Sortable) {
       new Sortable(el, {
+        filter: 'button',
+        preventOnFilter: false,
         animation: 150,
+        draggable: '.role-item',
         group: { name: 'roles', pull: false, put: false },
         onEnd: e => {
           const ids = state.config.roles[role];
@@ -354,30 +395,50 @@ function renderFallback() {
   }).join('');
 
   el.innerHTML = `
-    <div class="section-header"><h2>Fallback</h2></div>
-    <p class="text-muted" style="margin-bottom:10px">When none of your role's layouts can be picked (or the role has none):</p>
+    <div class="section-header"><div><h2 id="fallback-title">When picks run out</h2><p>Used when your role has no available configured pick.</p></div></div>
     <div class="fallback-options">
-      <label class="fallback-radio ${fb.mode === 'random_default' ? 'active' : ''}" onclick="setFallbackMode('random_default')">
-        <input type="radio" name="fb" ${fb.mode === 'random_default' ? 'checked' : ''}>
-        Random champion + default runes
+      <label class="fallback-radio ${fb.mode === 'random_default' ? 'active' : ''}">
+        <input type="radio" name="fb" value="random_default" onchange="setFallbackMode(this.value)" ${fb.mode === 'random_default' ? 'checked' : ''}>
+        Random champion, default runes
       </label>
-      <label class="fallback-radio ${fb.mode === 'fallback_layout' ? 'active' : ''} ${noLayouts ? 'disabled' : ''}"
-             onclick="${noLayouts ? '' : "setFallbackMode('fallback_layout')"}">
-        <input type="radio" name="fb" ${fb.mode === 'fallback_layout' ? 'checked' : ''} ${noLayouts ? 'disabled' : ''}>
-        Use layout:
+      <div class="fallback-radio ${fb.mode === 'fallback_layout' ? 'active' : ''} ${noLayouts ? 'disabled' : ''}">
+        <label class="fallback-choice">
+          <input type="radio" name="fb" value="fallback_layout" onchange="setFallbackMode(this.value)" ${fb.mode === 'fallback_layout' ? 'checked' : ''} ${noLayouts ? 'disabled' : ''}>
+          Use a layout
+        </label>
         ${noLayouts
-          ? '<span class="text-muted">(add a layout first)</span>'
-          : `<select onchange="setFallbackLayout(this.value)" onclick="event.stopPropagation()">${layoutOptions}</select>`}
-      </label>
-      <label class="fallback-radio ${fb.mode === 'dodge' ? 'active' : ''}" onclick="setFallbackMode('dodge')">
-        <input type="radio" name="fb" ${fb.mode === 'dodge' ? 'checked' : ''}>
-        Dodge champ select
+          ? '<span class="text-muted">Add a champion first</span>'
+          : `<select aria-label="Fallback layout" onchange="setFallbackLayout(this.value)">${layoutOptions}</select>`}
+      </div>
+      <label class="fallback-radio ${fb.mode === 'dodge' ? 'active' : ''}">
+        <input type="radio" name="fb" value="dodge" onchange="setFallbackMode(this.value)" ${fb.mode === 'dodge' ? 'checked' : ''}>
+        Dodge champion select
       </label>
     </div>
   `;
 }
 
 // ===================== HANDLERS =====================
+
+function moveBan(index, direction) {
+  const next = index + direction;
+  const bans = state.config.bans;
+  if (next < 0 || next >= bans.length) return;
+  [bans[index], bans[next]] = [bans[next], bans[index]];
+  renderBans();
+  autoSave();
+  document.querySelectorAll('.ban-item')[next]?.querySelector('.order-button:not(:disabled)')?.focus();
+}
+
+function moveInRole(role, index, direction) {
+  const ids = state.config.roles[role];
+  const next = index + direction;
+  if (next < 0 || next >= ids.length) return;
+  [ids[index], ids[next]] = [ids[next], ids[index]];
+  renderRoles();
+  autoSave();
+  document.querySelectorAll(`#role-items-${role} .role-item`)[next]?.querySelector('.order-button:not(:disabled)')?.focus();
+}
 
 function removeBan(i) {
   state.config.bans.splice(i, 1);
@@ -460,6 +521,7 @@ function toggleLayoutRole(lid, role) {
   renderPool();
   renderRoles();
   autoSave();
+  document.querySelector(`[data-layout-id="${lid}"] [onclick="toggleLayoutRole('${lid}','${role}')"]`)?.focus();
 }
 
 function removeFromRole(role, lid) {
@@ -477,6 +539,7 @@ function setFallbackMode(mode) {
   state.config.fallback.mode = mode;
   normalizeFallback();
   renderFallback();
+  document.querySelector('input[name="fb"]:checked')?.focus();
   autoSave();
 }
 
@@ -484,15 +547,25 @@ function setFallbackLayout(lid) {
   state.config.fallback.mode = 'fallback_layout';
   state.config.fallback.layout_id = lid;
   renderFallback();
+  document.querySelector('[aria-label="Fallback layout"]')?.focus();
   autoSave();
 }
 
 // ===================== MODALS =====================
 
+let modalOpener = null;
 function openModal(html) {
+  const overlay = document.getElementById('modal-overlay');
+  const wasOpen = !overlay.classList.contains('hidden');
+  const activeAction = wasOpen ? document.activeElement?.getAttribute('onclick') : null;
+  if (!wasOpen) modalOpener = document.activeElement;
   document.getElementById('modal-content').innerHTML = html;
-  document.getElementById('modal-overlay').classList.remove('hidden');
+  document.querySelector('#modal-content h3')?.setAttribute('id', 'modal-title');
+  overlay.classList.remove('hidden');
+  document.getElementById('app').inert = true;
   document.body.style.overflow = 'hidden';
+  const matched = activeAction && [...overlay.querySelectorAll('[onclick]')].find(el => el.getAttribute('onclick') === activeAction);
+  (matched || overlay.querySelector('input') || overlay.querySelector('.modal-close')).focus();
 }
 
 function closeModal(e) {
@@ -501,26 +574,35 @@ function closeModal(e) {
 }
 
 function closeModalForce() {
-  document.getElementById('modal-overlay').classList.add('hidden');
+  const overlay = document.getElementById('modal-overlay');
+  if (overlay.classList.contains('hidden')) return;
+  overlay.classList.add('hidden');
+  document.getElementById('app').inert = false;
   document.body.style.overflow = '';
+  const opener = modalOpener;
+  const action = opener?.getAttribute('onclick');
+  queueMicrotask(() => {
+    const target = opener?.isConnected ? opener : [...document.querySelectorAll('#app [onclick]')].find(el => el.getAttribute('onclick') === action);
+    target?.focus();
+  });
 }
 
 // --- Champion Picker ---
 function openChampionPicker(callback) {
   window._champCb = callback;
   openModal(`
-    <div class="modal-header"><h3>Select Champion</h3></div>
-    <input type="text" id="champ-search" class="search-input" placeholder="Search champions..." oninput="filterChampions()">
+    <div class="modal-header"><h3>Choose a champion</h3></div>
+    <input type="text" id="champ-search" class="search-input" aria-label="Search champions" placeholder="Search champions…" oninput="filterChampions()">
     <div id="champ-grid" class="champ-grid">
       ${state.championList.map(name => `
-        <div class="champ-option" onclick="pickChampion('${esc(name)}')">
+        <button type="button" class="champ-option" onclick="pickChampion('${esc(name)}')">
           <img src="${champIcon(name)}" alt="${esc(name)}" loading="lazy">
           <span>${name}</span>
-        </div>
+        </button>
       `).join('')}
     </div>
+    <p id="champ-empty" class="text-muted hidden">No champions found. Try another name.</p>
   `);
-  setTimeout(() => document.getElementById('champ-search')?.focus(), 50);
 }
 
 function filterChampions() {
@@ -529,6 +611,7 @@ function filterChampions() {
     const name = norm(el.querySelector('span').textContent);
     el.style.display = name.includes(q) ? '' : 'none';
   });
+  document.getElementById('champ-empty').classList.toggle('hidden', [...document.querySelectorAll('.champ-option')].some(el => el.style.display !== 'none'));
 }
 
 function pickChampion(name) {
@@ -564,7 +647,7 @@ function renderSpellPicker() {
 
   openModal(`
     <div class="modal-header">
-      <h3>Summoner Spells</h3>
+      <h3>Summoner spells</h3>
       <p class="text-muted">Click spells in order: first click = D, second = F</p>
     </div>
     <div class="spell-order-preview">
@@ -576,12 +659,11 @@ function renderSpellPicker() {
       ${state.spellList.map(s => {
         const idx = _spellOrder.indexOf(s);
         const cls = idx >= 0 ? 'selected' : '';
-        const badge = idx === 0 ? 'D' : idx === 1 ? 'F' : '';
         return `
-        <div class="spell-option ${cls}" onclick="toggleSpell('${s}')" data-spell="${s}">
+        <button type="button" class="spell-option ${cls}" aria-pressed="${idx >= 0}" onclick="toggleSpell('${s}')" data-spell="${s}">
           <img src="${spellIcon(s)}" alt="${s}">
           <span>${s[0].toUpperCase() + s.slice(1)}</span>
-        </div>`;
+        </button>`;
       }).join('')}
     </div>
     <div class="modal-footer">
@@ -667,17 +749,17 @@ function renderRunePickerModal() {
   const secondaryTree = state.runes.find(t => t.id === runePicker.secondaryTreeId);
 
   openModal(`
-    <div class="modal-header"><h3>Edit Runes</h3></div>
+    <div class="modal-header"><h3>Choose your runes</h3><p class="text-muted">Choose a primary tree, then a secondary tree. Clear to use recommended runes.</p></div>
     <div class="rune-picker">
       <div class="rune-trees-select">
         ${state.runes.map(tree => {
           let cls = 'tree-icon';
           if (tree.id === runePicker.primaryTreeId) cls += ' primary-selected';
           else if (tree.id === runePicker.secondaryTreeId) cls += ' secondary-selected';
-          return `<div class="${cls}" onclick="selectTree(${tree.id})" title="${tree.name}">
+          return `<button type="button" class="${cls}" aria-label="${tree.name}${tree.id === runePicker.primaryTreeId ? ' (primary)' : tree.id === runePicker.secondaryTreeId ? ' (secondary)' : ''}" aria-pressed="${tree.id === runePicker.primaryTreeId || tree.id === runePicker.secondaryTreeId}" onclick="selectTree(${tree.id})" title="${tree.name}">
             <img src="${runeIcon(tree.icon)}" alt="${tree.name}">
             <span>${tree.name}</span>
-          </div>`;
+          </button>`;
         }).join('')}
       </div>
 
@@ -687,10 +769,10 @@ function renderRunePickerModal() {
           ${primaryTree ? primaryTree.slots.map((slot, si) => `
             <div class="rune-slot">
               ${slot.runes.map(rune => `
-                <div class="rune-option ${si === 0 ? 'keystone' : ''} ${runePicker.primaryRunes[si] === rune.id ? 'selected' : ''}"
-                     onclick="selectPrimaryRune(${si},${rune.id})" title="${rune.name}">
+                <button type="button" class="rune-option ${si === 0 ? 'keystone' : ''} ${runePicker.primaryRunes[si] === rune.id ? 'selected' : ''}"
+                     aria-pressed="${runePicker.primaryRunes[si] === rune.id}" onclick="selectPrimaryRune(${si},${rune.id})" aria-label="${rune.name}" title="${rune.name}">
                   <img src="${runeIcon(rune.icon)}" alt="${rune.name}">
-                </div>
+                </button>
               `).join('')}
             </div>
           `).join('') : '<p class="text-muted" style="text-align:center;padding:20px">Click a tree above</p>'}
@@ -702,10 +784,10 @@ function renderRunePickerModal() {
             const idx = si + 1;
             return `<div class="rune-slot">
               ${slot.runes.map(rune => `
-                <div class="rune-option ${runePicker.secondarySlots[idx] === rune.id ? 'selected' : ''}"
-                     onclick="selectSecondaryRune(${idx},${rune.id})" title="${rune.name}">
+                <button type="button" class="rune-option ${runePicker.secondarySlots[idx] === rune.id ? 'selected' : ''}"
+                     aria-pressed="${runePicker.secondarySlots[idx] === rune.id}" onclick="selectSecondaryRune(${idx},${rune.id})" aria-label="${rune.name}" title="${rune.name}">
                   <img src="${runeIcon(rune.icon)}" alt="${rune.name}">
-                </div>
+                </button>
               `).join('')}
             </div>`;
           }).join('') : '<p class="text-muted" style="text-align:center;padding:20px">Click a different tree</p>'}
@@ -717,8 +799,8 @@ function renderRunePickerModal() {
         ${STAT_SHARDS.map((row, ri) => `
           <div class="shard-row">
             ${row.map(shard => `
-              <div class="shard-option ${runePicker.statShards[ri] === shard.id ? 'selected' : ''}"
-                   onclick="selectStatShard(${ri},${shard.id})" title="${shard.name}"><img src="${shard.icon}" class="shard-icon" onerror="this.style.display='none'"></div>
+              <button type="button" class="shard-option ${runePicker.statShards[ri] === shard.id ? 'selected' : ''}"
+                   onclick="selectStatShard(${ri},${shard.id})" aria-label="${shard.name}" aria-pressed="${runePicker.statShards[ri] === shard.id}" title="${shard.name}"><img src="${shard.icon}" class="shard-icon" alt="" onerror="this.style.display='none'"></button>
             `).join('')}
           </div>
         `).join('')}
@@ -826,20 +908,27 @@ function clearRunes() {
 
 // ===================== KEYBOARD =====================
 document.addEventListener('keydown', e => {
+  const overlay = document.getElementById('modal-overlay');
+  if (overlay.classList.contains('hidden')) return;
   if (e.key === 'Escape') closeModalForce();
+  if (e.key === 'Tab') {
+    const focusable = [...overlay.querySelectorAll('button:not(:disabled), input, select, [tabindex="0"]')].filter(el => el.getClientRects().length);
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+  }
 });
 
 // ===================== INIT =====================
 async function init() {
   try {
-    await loadDDragon();
-    await loadConfig();
+    await Promise.all([loadDDragon(), loadConfig()]);
     document.getElementById('loading').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
     render();
   } catch (e) {
     document.getElementById('loading').innerHTML =
-      `<p style="color:var(--red)">Failed to load: ${e.message}</p>
+      `<p>Couldn’t load LoLQ. Check your connection and that the editor is running.</p>
        <button onclick="location.reload()" class="btn-primary" style="margin-top:12px">Retry</button>`;
   }
 }
