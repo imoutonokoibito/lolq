@@ -22,6 +22,7 @@ const LoLQ = (() => {
     document.getElementById('setup').classList.remove('hidden');
     document.getElementById('setup-status').textContent = message;
     document.getElementById('app').inert = true;
+    document.getElementById('app').classList.add('hidden');
     document.getElementById('loading').classList.add('hidden');
     if (ready) document.getElementById('setup-title').textContent = 'Let’s reconnect.';
   }
@@ -42,7 +43,7 @@ const LoLQ = (() => {
     busy = true;
     try {
       if (!token) {
-        const response = await api('/api/session');
+        const response = await api('/api/session', { signal: AbortSignal.timeout(120000) });
         if (!response.ok) throw new Error('connection');
         const session = await response.json();
         if (session.protocol !== 1 || typeof session.token !== 'string') throw new Error('version');
@@ -66,6 +67,7 @@ const LoLQ = (() => {
       }
       document.getElementById('setup').classList.add('hidden');
       document.getElementById('app').inert = false;
+      if (state.config && state.championList.length) document.getElementById('app').classList.remove('hidden');
       document.getElementById('connection-status').textContent = describe(status);
       if (state.config && !saving && savedRevision === saveRevision) {
         state.config.enabled = status.enabled;
@@ -101,6 +103,7 @@ const LoLQ = (() => {
     if (legacy) {
       document.getElementById('setup').classList.add('hidden');
       document.getElementById('app').inert = false;
+      if (state.config && state.championList.length) document.getElementById('app').classList.remove('hidden');
       document.getElementById('connection-status').textContent = 'Local editor · Keep the autopicker running';
       init();
       return;

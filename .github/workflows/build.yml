@@ -30,6 +30,7 @@ jobs:
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" installer/LoLQ.iss
           if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
       - name: Test install, launch, upgrade and uninstall
+        timeout-minutes: 5
         shell: pwsh
         run: ./installer/smoke.ps1
       - name: Hash installer

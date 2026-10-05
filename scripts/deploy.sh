@@ -11,4 +11,4 @@ ssh imoutosuki 'mkdir -p /root/lolq/static /root/lolq/downloads /var/run/imoutos
 rsync -az "$STAGE/LoLQ-Setup.exe" "$STAGE/SHA256SUMS.txt" imoutosuki:/root/lolq/downloads/
 rsync -az "$ROOT/static/" imoutosuki:/root/lolq/static/
 rsync -az "$ROOT/web.js" "$ROOT/app.json" imoutosuki:/root/lolq/
-ssh imoutosuki 'SOCKET_PATH=/var/run/imoutosuki/lolq.sock pm2 restart lolq-web --update-env 2>/dev/null || SOCKET_PATH=/var/run/imoutosuki/lolq.sock pm2 start /root/lolq/web.js --name lolq-web; pm2 save'
+ssh imoutosuki 'SOCKET_PATH=/var/run/imoutosuki/lolq.sock pm2 restart lolq-web --update-env 2>/dev/null || SOCKET_PATH=/var/run/imoutosuki/lolq.sock pm2 start /root/lolq/web.js --name lolq-web; pm2 save >/dev/null; touch /root/lolq'
