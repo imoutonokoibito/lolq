@@ -164,3 +164,32 @@ h2 { font-size: 23px; letter-spacing: -.6px; font-weight: 650; }
   .spell-order-preview { gap: 12px; } .spell-slot { flex-wrap: wrap; } .tree-icon span { font-size: 9px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; scroll-behavior: auto !important; } }
+
+/* Setup and the everyday connection state share the editor's quiet visual language. */
+.setup-shell { max-width: 1040px; margin: 0 auto; padding: 32px 28px; }
+.setup-card { max-width: 620px; margin: 72px auto 80px; }
+.setup-card h1 { font-size: clamp(42px, 7vw, 68px); line-height: 1.06; letter-spacing: -.055em; margin: 16px 0 22px; }
+.setup-lead { font-size: 22px; line-height: 1.5; color: var(--secondary); margin-bottom: 30px; }
+.download-button { display: inline-flex; align-items: center; gap: 28px; padding: 15px 24px; text-decoration: none; font-size: 16px; }
+.setup-meta { font-size: 13px; line-height: 1.6; color: var(--secondary); margin-top: 14px; }
+.setup-steps { list-style: none; padding: 0; margin: 42px 0; display: grid; gap: 26px; }
+.setup-steps li { display: flex; gap: 18px; align-items: flex-start; }
+.setup-steps li > span { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 50%; font-size: 13px; flex: 0 0 auto; }
+.setup-steps strong { font-size: 16px; }
+.setup-steps p { margin: 5px 0 0; font-size: 14px; line-height: 1.5; color: var(--secondary); }
+.setup-actions { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.setup-actions a, .update-link { color: var(--accent); font-size: 14px; text-decoration: none; }
+.setup-help { font-size: 13px; line-height: 1.6; color: var(--secondary); margin-top: 28px; }
+.setup-help summary { cursor: pointer; }
+.connection-bar { margin-top: 26px; padding: 18px 20px; border: 1px solid var(--border); border-radius: 16px; display: flex; align-items: center; justify-content: space-between; gap: 20px; font-size: 14px; }
+.connection-dot { display: inline-block; height: 7px; width: 7px; border-radius: 50%; background: var(--accent); margin-right: 10px; }
+.automation-toggle { display: inline-flex; gap: 12px; align-items: center; cursor: pointer; position: relative; white-space: nowrap; }
+.automation-toggle input { position: absolute; right: 0; width: 42px; height: 26px; opacity: 0; cursor: pointer; }
+.toggle-track { width: 42px; height: 26px; border-radius: 16px; background: var(--border); transition: background .15s; }
+.toggle-track::after { content: ''; display: block; height: 20px; width: 20px; margin: 3px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #0002; transition: transform .15s; }
+.automation-toggle input:checked + .toggle-track { background: #34c759; }
+.automation-toggle input:checked + .toggle-track::after { transform: translateX(16px); }
+.automation-toggle input:focus-visible + .toggle-track { outline: 3px solid var(--accent); outline-offset: 4px; }
+.update-link { display: inline-block; margin-top: 12px; }
+@media (max-width: 600px) { .setup-card { margin-top: 48px; } .connection-bar { align-items: flex-start; flex-direction: column; } }
+@media (prefers-reduced-motion: reduce) { .toggle-track, .toggle-track::after { transition: none; } }

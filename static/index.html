@@ -5,12 +5,33 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#f5f5f7">
+  <meta name="referrer" content="no-referrer">
+  <meta name="description" content="Your champions, spells, and runes, ready for every League game. Install LoLQ once on Windows and configure everything here.">
   <title>LoLQ · Your champion select</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to settings</a>
-  <div id="loading" role="status">
+  <section id="setup" class="setup-shell" aria-labelledby="setup-title">
+    <a class="logo" href="/" aria-label="imoutosuki home">lolq<span aria-hidden="true">.</span></a>
+    <div class="setup-card">
+      <p class="eyebrow">LESS CLICKING. MORE LEAGUE.</p>
+      <h1 id="setup-title">Your next game,<br>already set.</h1>
+      <p class="setup-lead">Your champions, spells, and runes.<br>Ready when you are.</p>
+      <a id="download-setup" class="btn-primary download-button" href="downloads/LoLQ-Setup.exe">Download for Windows <span aria-hidden="true">↓</span></a>
+      <p id="setup-version" class="setup-meta">Windows 10 / 11 · No Python or extra setup</p>
+      <ol class="setup-steps">
+        <li><span>1</span><div><strong>Install once.</strong><p>Open the download. LoLQ runs quietly in your tray.</p></div></li>
+        <li><span>2</span><div><strong>Make it yours.</strong><p>Choose your champions here, then turn automation on.</p></div></li>
+        <li><span>3</span><div><strong>Play League.</strong><p>LoLQ handles accepts, bans, picks, spells, and runes.</p></div></li>
+      </ol>
+      <div class="setup-actions"><a id="open-connector" href="lolq://open">Already installed? Open LoLQ</a><button id="connect-button" class="btn-sm">Connect</button></div>
+      <p id="setup-status" class="setup-meta" role="status" aria-live="polite"></p>
+      <details class="setup-help"><summary>Need a hand?</summary><p>Run the installer from your downloads, then allow the browser’s local-device connection prompt. If you previously blocked it, reset that permission in the address bar and select Connect.</p><p>You can pause or quit from the tray. Uninstall from Windows Settings → Apps. Your configuration stays on this PC; no Riot password is needed.</p><p>The current installer is unsigned, so Windows may display a publisher or SmartScreen warning. Verify that you downloaded it from this page before deciding whether to run it.</p></details>
+    </div>
+    <footer class="app-footer">Independent community tool. Not affiliated with Riot Games.</footer>
+  </section>
+  <div id="loading" class="hidden" role="status">
     <div class="loader" aria-hidden="true"></div>
     <p>Getting your champions ready…</p>
   </div>
@@ -31,7 +52,11 @@
         <p class="eyebrow">YOUR CHAMPION SELECT</p>
         <h1>Ready for your next game.</h1>
         <p>Your champions, spells, and runes. Just the way you play.</p>
-        <div class="editor-note"><span aria-hidden="true">↳</span> Keep the LoLQ autopicker running while you play.</div>
+        <div class="connection-bar">
+          <div><span class="connection-dot" aria-hidden="true"></span><span id="connection-status" role="status" aria-live="polite">Connecting…</span></div>
+          <label class="automation-toggle"><span>Automation</span><input id="automation-enabled" type="checkbox" onchange="toggleAutomation(this.checked)"><span class="toggle-track" aria-hidden="true"></span></label>
+        </div>
+        <a id="update-link" class="update-link hidden" href="downloads/LoLQ-Setup.exe">A new version is ready. Download update ↗</a>
       </div>
       <section id="pool-section" aria-labelledby="pool-title">
         <div class="section-header">
@@ -48,7 +73,7 @@
         <section id="bans-section" aria-labelledby="bans-title"></section>
         <section id="fallback-section" aria-labelledby="fallback-title"></section>
       </div>
-      <footer class="app-footer"><span>Set once. Ready for the next queue.</span><span>LoLQ · Local configuration</span></footer>
+      <footer class="app-footer"><span>Set once. Ready for the next queue.</span><span id="connector-version">LoLQ · Settings saved on this PC</span></footer>
     </main>
   </div>
 
@@ -60,6 +85,7 @@
   </div>
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+  <script src="connection.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

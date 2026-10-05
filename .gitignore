@@ -33,3 +33,7 @@ env/
 # Screenshots
 *.png
 !lolq-ui.png
+
+# Generated release assets
+downloads/
+installer/LoLQ.ico

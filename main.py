@@ -9,6 +9,7 @@ import random
 import os
 from lcu_driver import Connector
 from diagnostics import logger, request_lcu
+import runtime
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -32,7 +33,23 @@ _owned_champions_task = None
 # received." That is a startup race, not a failure, so keep asking instead of giving up.
 CHAMPION_DATA_RETRY_DELAYS = (2, 5, 10, 15, 30, 60, 60, 60, 60)
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+CONFIG_PATH = str(runtime.CONFIG_PATH)
+_status_task = None
+
+
+async def report_status(connection):
+    """Only non-sensitive health leaves the picker process."""
+    while True:
+        try:
+            response = await asyncio.wait_for(connection.request("get", "/lol-gameflow/v1/gameflow-phase"), 8)
+            current = await response.json() if response.status == 200 else None
+            if os.environ.get("LOLQ_STATUS_PATH"):
+                runtime.atomic_json(os.environ["LOLQ_STATUS_PATH"], {"pid": os.getpid(), "connected": response.status == 200, "phase": current})
+        except Exception:
+            if os.environ.get("LOLQ_STATUS_PATH"):
+                runtime.atomic_json(os.environ["LOLQ_STATUS_PATH"], {"pid": os.getpid(), "connected": False, "phase": None})
+        await asyncio.sleep(3)
+
 
 def migrate_config(cfg):
     """Convert old champions.{role}.order format to layouts + roles format"""
@@ -488,6 +505,10 @@ async def verified_pick(connection, action, champion_id, completed):
 @connector.ready
 async def connect(connection):
     global champions_map, runes_data, owned_champion_ids, have_i_prepicked, _owned_champions_task
+    global _status_task
+    if _status_task:
+        _status_task.cancel()
+    _status_task = asyncio.ensure_future(report_status(connection))
     have_i_prepicked = False
     owned_champion_ids = None
     logger.info('League client connected; loading champion and rune data')
@@ -499,6 +520,8 @@ async def connect(connection):
 
 @connector.ws.register('/lol-matchmaking/v1/ready-check', event_types=('UPDATE',))
 async def ready_check_changed(connection, event):
+    if not runtime.enabled():
+        return
     global have_i_prepicked
     if event.data['state'] == 'InProgress' and event.data['playerResponse'] == 'None':
         await request_lcu(connection, 'post', '/lol-matchmaking/v1/ready-check/accept', data={})
@@ -512,6 +535,8 @@ async def champ_select_changed(connection, event):
     global have_i_prepicked, have_i_dodged
     # Websocket callbacks can overlap; queued events must never act on stale actions.
     async with champ_select_lock:
+        if not runtime.enabled():
+            return
         logger.debug('Champion-select event=%s', event.type)
         if event.type.upper() == 'DELETE':
             have_i_prepicked = have_i_dodged = False
@@ -779,6 +804,12 @@ async def set_runes(connection, rune_names):
 
 @connector.close
 async def disconnect(_):
+    global _status_task
+    if _status_task:
+        _status_task.cancel()
+        _status_task = None
+    if os.environ.get('LOLQ_STATUS_PATH'):
+        runtime.atomic_json(os.environ['LOLQ_STATUS_PATH'], {'pid': os.getpid(), 'connected': False, 'phase': None})
     logger.info('The client has been closed!')
 
 

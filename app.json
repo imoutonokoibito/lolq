@@ -1,0 +1,8 @@
+{
+  "name": "lolq",
+  "displayName": "LoLQ",
+  "description": "Your League champions, spells and runes. One Windows setup, ready for every queue.",
+  "icon": "◉",
+  "category": "games",
+  "routes": [{"path": "/lolq", "target": {"type": "unix", "socket": "lolq.sock"}, "auth": "none", "pathRewrite": false}]
+}

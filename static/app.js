@@ -154,7 +154,7 @@ async function loadDDragon() {
 }
 
 async function loadConfig() {
-  const response = await fetch('/api/config');
+  const response = await LoLQ.api('/api/config');
   if (!response.ok) throw new Error('Could not load your configuration');
   state.config = await response.json();
   if (!state.config.layouts) state.config.layouts = {};
@@ -209,7 +209,7 @@ async function saveConfig() {
     // Serialize writes, then save again if editing continued during the request.
     do {
       const revision = saveRevision;
-      const response = await fetch('/api/config', {
+      const response = await LoLQ.api('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(state.config)
@@ -919,18 +919,24 @@ document.addEventListener('keydown', e => {
   }
 });
 
+function toggleAutomation(value) {
+  state.config.enabled = value;
+  autoSave();
+}
+
 // ===================== INIT =====================
 async function init() {
   try {
     await Promise.all([loadDDragon(), loadConfig()]);
     document.getElementById('loading').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
+    document.getElementById('automation-enabled').checked = state.config.enabled !== false;
     render();
   } catch (e) {
     document.getElementById('loading').innerHTML =
-      `<p>Couldn’t load LoLQ. Check your connection and that the editor is running.</p>
+      `<p>Couldn’t load your champions. Check your internet connection and try again.</p>
        <button onclick="location.reload()" class="btn-primary" style="margin-top:12px">Retry</button>`;
   }
 }
 
-init();
+LoLQ.start(init);

@@ -16,8 +16,9 @@ NOT under the clod GitHub-push ban — that ban is `xXhackerlordXx/clod/` only.
   `.github/workflows/build.yml` (pyinstaller, windows-latest runner).
 - `static/app.js` + `server.py` — local web config editor for `config.json`
   (layouts/roles/bans/fallback). Pure vanilla JS, no build step.
-- No test suite. No local League client available for live testing — verify
-  logic changes by reading LCU API docs/community scripts, not by running.
+- Tests: `python -m unittest discover -s tests -v`; Windows installer lifecycle in CI.
+- A local macOS League client is available for scoped tests. CI has no League client.
+- Desktop/release architecture and setup are documented in `README.md`; update affected contracts alongside implementation.
 
 ## LCU API — undocumented, verify via community sources
 

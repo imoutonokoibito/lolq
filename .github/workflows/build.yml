@@ -1,30 +1,61 @@
-name: Build
-
-on: [push]
-
+name: Windows installer
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pyinstaller
-        pip install -r requirements.txt  # if you have any requirements
-        
-    - name: Build executable
-      run: pyinstaller --onefile main.py
-        
-    - name: Upload built executable
-      uses: actions/upload-artifact@v4
-      with:
-        name: lolq
-        path: dist/
-        permissions: read-all
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install build dependencies
+        run: python -m pip install -r requirements.txt pyinstaller==6.20.0
+      - name: Test
+        run: python -m unittest discover -s tests -v
+      - name: Build desktop app
+        run: |
+          python installer/icon.py
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --name LoLQ --icon installer/LoLQ.ico --add-data "static;static" --collect-all lcu_driver desktop.py
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $version = (Get-Content static/release.json | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") { throw 'Release version does not match tag' }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" installer/LoLQ.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
+      - name: Test install, launch, upgrade and uninstall
+        shell: pwsh
+        run: ./installer/smoke.ps1
+      - name: Hash installer
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist/installer/LoLQ-Setup.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  LoLQ-Setup.exe" | Set-Content dist/installer/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LoLQ-Windows
+          path: dist/installer/*
+          if-no-files-found: error
+          retention-days: 30
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: LoLQ-Windows
+          path: release
+      - name: Publish downloadable installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" release/* --title "LoLQ $GITHUB_REF_NAME" --notes "Windows all-in-one setup. Configure LoLQ at https://imoutosuki.com/lolq/. Includes the background connector, tray controls, startup option and uninstaller. This build is unsigned."

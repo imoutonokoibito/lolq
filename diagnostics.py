@@ -14,11 +14,12 @@ def configure_logging():
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
     formatter = logging.Formatter('%(asctime)s %(levelname)s [%(process)d] %(message)s')
-    console = logging.StreamHandler(sys.stdout)
-    console.setLevel(logging.INFO)
-    console.setFormatter(formatter)
-    logger.addHandler(console)
-    directory = Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'lolq' / 'logs'
+    if sys.stdout is not None:
+        console = logging.StreamHandler(sys.stdout)
+        console.setLevel(logging.INFO)
+        console.setFormatter(formatter)
+        logger.addHandler(console)
+    directory = (Path(os.environ['LOLQ_CONFIG_PATH']).parent if os.environ.get('LOLQ_CONFIG_PATH') else Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'lolq') / 'logs'
     try:
         directory.mkdir(parents=True, exist_ok=True)
         handler = RotatingFileHandler(directory / 'lolq.log', maxBytes=5 * 1024 * 1024,

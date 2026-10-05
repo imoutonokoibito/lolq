@@ -1,6 +1,7 @@
-asyncio
-requests
-urllib3
-toml
-lcu_driver
-flask
+requests>=2.32.3,<3
+urllib3>=2.2.3,<3
+lcu-driver==3.0.2
+Flask>=3.1.0,<4
+waitress>=3.0.2,<4
+pystray==0.19.5
+Pillow>=11.0,<13
