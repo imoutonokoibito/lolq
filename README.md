@@ -16,7 +16,7 @@ Windows 10/11 x64. The current installer is unsigned; Windows may show a publish
 
 ## How it works
 
-The hosted page talks to a small connector at `http://127.0.0.1:17653`. Only the approved website origins and the local editor can bootstrap a session. Requests require a custom header and, after bootstrap, a random process-local bearer token. The connector checks Host and Origin, binds only to loopback, validates bounded configuration writes and saves atomically. It exposes configuration and status, **not an unrestricted LCU proxy**. Riot credentials never go to the website.
+The hosted page talks to a small connector at `http://127.0.0.1:17653`. Only the approved website origins and the local editor can bootstrap a session. Requests require a custom header and, after bootstrap, a random process-local bearer token. The connector checks Host and Origin, binds only to loopback, validates bounded configuration writes and saves atomically. On Windows it reserves its socket exclusively, so reopening LoLQ cannot create duplicate pickers. Reads and writes retry brief Windows file-sharing conflicts. It exposes configuration and status, **not an unrestricted LCU proxy**. Riot credentials never go to the website.
 
 `desktop.py` supervises the existing `main.py` picker, serves `bridge.py` and supplies tray controls. A fresh install starts paused. Settings and logs live under `%LOCALAPPDATA%\LoLQ`; upgrades preserve them. `lolq://open` opens the hosted page through the installed app. Startup is an optional per-user installer task.
 
