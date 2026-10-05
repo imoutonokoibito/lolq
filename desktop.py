@@ -40,7 +40,7 @@ class Controller:
                       worker=running, connected=False, phase=None)
         try:
             path = self.directory / 'status.json'
-            data = json.loads(path.read_text(encoding='utf-8'))
+            data = runtime.read_json(path)
             if running and data.get('pid') == self.process.pid and time.time() - path.stat().st_mtime < 20:
                 result.update(connected=data.get('connected') is True, phase=data.get('phase'))
         except (OSError, ValueError):

@@ -80,8 +80,11 @@ class BridgeTests(unittest.TestCase):
     def test_atomic_writes_remain_readable_and_settings_persist(self):
         errors = []
         def write():
-            for i in range(30):
-                runtime.atomic_json(self.path, {**runtime.DEFAULT_CONFIG, 'bans': ['Ahri'] * (i % 3)})
+            try:
+                for i in range(30):
+                    runtime.atomic_json(self.path, {**runtime.DEFAULT_CONFIG, 'bans': ['Ahri'] * (i % 3)})
+            except Exception as exc:
+                errors.append(exc)
         thread = threading.Thread(target=write)
         thread.start()
         while thread.is_alive():

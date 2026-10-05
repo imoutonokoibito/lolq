@@ -38,9 +38,20 @@ def atomic_json(path, value):
             os.unlink(temporary)
 
 
+def read_json(path):
+    # Windows can briefly deny a new open while ReplaceFile/rename completes.
+    for attempt in range(20):
+        try:
+            with Path(path).open(encoding='utf-8') as file:
+                return json.load(file)
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.01)
+
+
 def read_config():
-    with CONFIG_PATH.open(encoding='utf-8') as file:
-        return json.load(file)
+    return read_json(CONFIG_PATH)
 
 
 def enabled():

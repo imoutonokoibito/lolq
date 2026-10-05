@@ -89,12 +89,10 @@ def migrate_config(cfg):
 
 def load_config():
     """Load config from config.json (called on every champ select for hot-reload)"""
-    with open(CONFIG_PATH, "r") as f:
-        cfg = json.load(f)
+    cfg = runtime.read_json(CONFIG_PATH)
     if "layouts" not in cfg:
         cfg = migrate_config(cfg)
-        with open(CONFIG_PATH, "w") as f:
-            json.dump(cfg, f, indent=2)
+        runtime.atomic_json(CONFIG_PATH, cfg)
     return cfg
 
 # Initial load to verify config exists
