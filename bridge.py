@@ -1,8 +1,22 @@
 """Loopback-only API for the hosted LoLQ editor. Never exposes LCU credentials."""
 import secrets
+import socket
+import sys
+from waitress.server import TcpWSGIServer
 from pathlib import Path
 from flask import Flask, jsonify, request, send_from_directory
 import runtime
+
+
+class LoopbackServer(TcpWSGIServer):
+    def set_reuse_addr(self):
+        # SO_REUSEADDR permits competing listeners on Windows. The connector
+        # must own its port exclusively, including across Windows sessions.
+        if sys.platform == 'win32':
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            super().set_reuse_addr()
+
 
 ORIGINS = {'https://imoutosuki.com', 'https://glorreichersieg.com',
            f'http://127.0.0.1:{runtime.PORT}', f'http://localhost:{runtime.PORT}'}

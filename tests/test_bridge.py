@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 import runtime
-from bridge import create_app
+from bridge import create_app, LoopbackServer
 
 
 class BridgeTests(unittest.TestCase):
@@ -112,3 +112,15 @@ class PauseTests(unittest.IsolatedAsyncioTestCase):
             await main.ready_check_changed(connection, SimpleNamespace(data={'state': 'InProgress', 'playerResponse': 'None'}))
             await main.champ_select_changed(connection, SimpleNamespace(type='Update'))
         connection.request.assert_not_awaited()
+
+
+class SingleInstanceTests(unittest.TestCase):
+    def test_loopback_port_cannot_be_shared_by_two_connectors(self):
+        app = lambda environ, start_response: []
+        first = LoopbackServer(app, host='127.0.0.1', port=0, threads=1)
+        try:
+            with self.assertRaises(OSError):
+                second = LoopbackServer(app, host='127.0.0.1', port=first.effective_port, threads=1)
+                second.close()
+        finally:
+            first.close()

@@ -33,6 +33,15 @@ jobs:
         timeout-minutes: 5
         shell: pwsh
         run: ./installer/smoke.ps1
+      - name: Preserve installer test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-test-diagnostics
+          path: |
+            ${{ runner.temp }}/lolq-install.log
+            ${{ runner.temp }}/lolq-smoke-data/logs/*
+          if-no-files-found: ignore
       - name: Hash installer
         shell: pwsh
         run: |

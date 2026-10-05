@@ -141,12 +141,11 @@ def main():
         import main as picker
         picker.connector.start()
         return
-    from bridge import create_app
-    from waitress import create_server
+    from bridge import create_app, LoopbackServer
     from diagnostics import logger
     controller = Controller(directory, args.no_worker)
     try:
-        server = create_server(create_app(controller), host='127.0.0.1', port=runtime.PORT, threads=4,
+        server = LoopbackServer(create_app(controller), host='127.0.0.1', port=runtime.PORT, threads=4,
                                clear_untrusted_proxy_headers=True, max_request_body_size=256 * 1024)
     except OSError:
         try:
